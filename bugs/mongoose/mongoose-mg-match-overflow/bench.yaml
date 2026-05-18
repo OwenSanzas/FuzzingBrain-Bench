@@ -1,0 +1,33 @@
+bug_id: mongoose-mg-match-overflow
+project: mongoose
+title: "Heap Buffer Overflow in mg_match"
+upstream_report: https://github.com/cesanta/mongoose/issues/3393
+
+target:
+  repo:         https://github.com/cesanta/mongoose
+  vuln_commit:  b313d697ff8c2156e85d411d7b3c226e4a0fefa9
+  language:     c
+  build_system: make
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain     # user-provided generic mg_match wrapper
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-07
+notes: |
+  Harness is a user-provided generic mg_match wrapper (substituted for
+  the original fuzz_security.c which is not in any public source).
+  See harness/PROVENANCE.md.
