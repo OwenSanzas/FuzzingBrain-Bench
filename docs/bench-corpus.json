@@ -1,0 +1,895 @@
+{
+  "generated": "2026-05-18",
+  "spec_version": "v1",
+  "count": 40,
+  "dropped_from_v1": [
+    "cups-oauth-open-redirect",
+    "njs-atod2-overflow"
+  ],
+  "dropped_reasons": {
+    "njs-atod2-overflow": "maintainer flagged as harness bug, not an njs vulnerability",
+    "cups-oauth-open-redirect": "logic bug, not fuzz-found; benchmark framing does not apply"
+  },
+  "bugs": [
+    {
+      "id": "avro-decompression-bomb",
+      "project": "avro",
+      "title": "Decompression bomb causes OutOfMemoryError via unbounded codec decompression",
+      "upstream_report": "https://github.com/apache/avro/pull/3625",
+      "bug_class": "oom",
+      "target": {
+        "repo": "https://github.com/apache/avro",
+        "vuln_commit": "4502c1ba1c453702fd26966a5e5c10441e0d1384",
+        "disclosed": "2026-01-14"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/avro",
+        "harness_file": null,
+        "notes": "OOM in Avro Java codec decompression; OSS-Fuzz uses Jazzer *Fuzzer.java targets but specific harness unknown."
+      },
+      "harness_provenance": "unknown",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Original PR #3625 was closed unmerged; actual fix landed via PR #3745 (AVRO-4247) on 2026-05-11 inside NonCopyingByteArrayOutputStream. Reporter URL points to the original (closed) PR."
+    },
+    {
+      "id": "avro-neg-block-size",
+      "project": "avro",
+      "title": "Negative block size causes allocation-size-too-big crash",
+      "upstream_report": "https://github.com/apache/avro/pull/3623",
+      "bug_class": "allocation-size-too-big",
+      "target": {
+        "repo": "https://github.com/apache/avro",
+        "vuln_commit": "3af7a4654d574be7c78125e610a7d4ca23542eab",
+        "disclosed": "2026-01-13"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/avro",
+        "harness_file": null,
+        "notes": "Apache Avro OSS-Fuzz uses Jazzer with *Fuzzer.java targets discovered at build time; the specific Java harness exercising DataFileReader block-size validation is not directly identifiable from the public oss-fuzz project dir."
+      },
+      "harness_provenance": "unknown",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file used by FuzzingBrain to trigger this C-language Avro bug is not obvious from OSS-Fuzz integration (which targets the Java implementation). Bug is in [C] datafile reader per PR title; likely a custom harness."
+    },
+    {
+      "id": "avro-neg-string-len",
+      "project": "avro",
+      "title": "Negative string length causes allocation-size-too-big crash",
+      "upstream_report": "https://github.com/apache/avro/pull/3622",
+      "bug_class": "allocation-size-too-big",
+      "target": {
+        "repo": "https://github.com/apache/avro",
+        "vuln_commit": "f7dfbc0d37608a896ffcc8734a8d64376c463039",
+        "disclosed": "2026-01-13"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/avro",
+        "harness_file": null,
+        "notes": "Bug is in [C] binary decoder per PR title; OSS-Fuzz Avro project is Java-only (Jazzer)."
+      },
+      "harness_provenance": "unknown",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Bug fix is in Avro C implementation; OSS-Fuzz integration covers Java only. Harness used by FuzzingBrain unclear."
+    },
+    {
+      "id": "binutils-rust-demangle-oom",
+      "project": "binutils",
+      "title": "OOM in rust_demangle via unbounded lifetime count in demangle_binder",
+      "upstream_report": "https://sourceware.org/bugzilla/show_bug.cgi?id=33878",
+      "bug_class": "oom",
+      "target": {
+        "repo": "https://sourceware.org/git/binutils-gdb.git",
+        "vuln_commit": "96c87c6dd55c38519ad168230d0893797b62fd52",
+        "disclosed": null
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/binutils",
+        "harness_file": "fuzz_nm.c",
+        "notes": "rust_demangle is in libiberty/rust-demangle.c (shared with GCC). OSS-Fuzz binutils has many fuzz_*.c harnesses; fuzz_nm typically exercises symbol demangling."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Sourceware bugzilla page is gated by Anubis (couldn't fetch directly); fix identified via GitHub mirror commit log referencing 'PR demangler/106641' which matches the bug description. Bugzilla 33878 report/disclosed date not retrievable. Harness file is a best-guess; could also be fuzz_objdump or fuzz_addr2line."
+    },
+    {
+      "id": "dtc-fdt32-misalign",
+      "project": "dtc",
+      "title": "Misaligned Memory Access in fdt32_to_cpu() During FDT Node Traversal",
+      "upstream_report": "https://github.com/dgibson/dtc/issues/178",
+      "bug_class": "misaligned-access",
+      "target": {
+        "repo": "https://github.com/dgibson/dtc",
+        "vuln_commit": "a26ef6400bd845beb6e7f369809ca1c42d856904",
+        "disclosed": "2026-01-27"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": null,
+        "notes": "dtc/libfdt is not directly integrated in OSS-Fuzz; harness is FuzzingBrain-written."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": false,
+      "review_notes": null
+    },
+    {
+      "id": "freerdp-ntlm-memleak",
+      "project": "FreeRDP",
+      "title": "Pre-Auth Memory Leak in FreeRDP NTLM AuthenticateMessage Parser Failure Path",
+      "upstream_report": "https://github.com/FreeRDP/FreeRDP/issues/12603",
+      "bug_class": "memory-leak",
+      "target": {
+        "repo": "https://github.com/FreeRDP/FreeRDP",
+        "vuln_commit": "d0418739c27fe95b0d38fc6aa2e3cb22b7ac1cee",
+        "disclosed": "2026-04-16"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/freerdp",
+        "harness_file": null,
+        "notes": "OSS-Fuzz FreeRDP uses cmake target 'fuzzers' to build all TestFuzz* binaries. FuzzingBrain's NTLM harness is in PR #12610 (not merged in this PR) - upstream OSS-Fuzz does not include an NTLM-specific fuzzer."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Fix landed in PR #12609 but the dedicated NTLM fuzzer (TestFuzzNTLM) was added separately in #12610 and is FuzzingBrain-authored; upstream OSS-Fuzz may not exercise NTLM message parsing directly."
+    },
+    {
+      "id": "fwupd-cab-mszip-bomb",
+      "project": "fwupd",
+      "title": "CAB MSZIP Decompression Bomb",
+      "upstream_report": "https://github.com/fwupd/fwupd/issues/9790",
+      "bug_class": "oom",
+      "target": {
+        "repo": "https://github.com/fwupd/fwupd",
+        "vuln_commit": "0c487397b74396c2360d56da7fb8bd5fa86f7ea0",
+        "disclosed": "2026-01-15"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/fwupd",
+        "harness_file": null,
+        "notes": "CAB fuzz target in fwupd; not directly listed in oss-fuzz/projects/fwupd."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file for CAB MSZIP target not directly identifiable from OSS-Fuzz integration."
+    },
+    {
+      "id": "fwupd-logitech-oob-read",
+      "project": "fwupd",
+      "title": "Out-of-Bounds Read in Logitech Bulk Controller Device Response Parsing",
+      "upstream_report": "https://github.com/fwupd/fwupd/issues/9792",
+      "bug_class": "oob-read",
+      "target": {
+        "repo": "https://github.com/fwupd/fwupd",
+        "vuln_commit": "8c11586c8a44e50c8ea7d946f83cfc57e7336071",
+        "disclosed": "2026-01-16"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/fwupd",
+        "harness_file": null,
+        "notes": "Logitech device response parser harness file not directly identifiable from OSS-Fuzz integration."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file for Logitech bulk controller response parser not directly identifiable."
+    },
+    {
+      "id": "fwupd-logitech-stack-overflow",
+      "project": "fwupd",
+      "title": "Stack Overflow in Logitech RDFU Firmware Parser via Deeply Nested JSON",
+      "upstream_report": "https://github.com/fwupd/fwupd/issues/9779",
+      "bug_class": "stack-overflow",
+      "target": {
+        "repo": "https://github.com/fwupd/fwupd",
+        "vuln_commit": "5cedf2f21255e0146ddc03c574447a0c6dad74d7",
+        "disclosed": "2026-01-14"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/fwupd",
+        "harness_file": null,
+        "notes": "fwupd OSS-Fuzz delegates to fwupd/contrib/ci/oss-fuzz.py; Logitech RDFU JSON parser harness file not directly identifiable."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Issue references multiple referenced commits (b662a216, 1a7415f4, 6d3d8a57, 127c2548, 52327cca) prior to the closing commit a9d1cc95 — the fix may comprise multiple commits. Closing commit a9d1cc95 (issue closer) selected as fixed_commit."
+    },
+    {
+      "id": "fwupd-sbatlevel-underflow",
+      "project": "fwupd",
+      "title": "Integer Underflow in sbatlevel Section Parser",
+      "upstream_report": "https://github.com/fwupd/fwupd/issues/9659",
+      "bug_class": "integer-underflow",
+      "target": {
+        "repo": "https://github.com/fwupd/fwupd",
+        "vuln_commit": "82a0998339c43fd36855492d9c5d68a20102c338",
+        "disclosed": "2025-12-10"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/fwupd",
+        "harness_file": null,
+        "notes": "fwupd OSS-Fuzz delegates to fwupd/contrib/ci/oss-fuzz.py; individual fuzz target file names are dynamically generated. The PE/sbatlevel parser fuzzer is among the targets."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Specific fuzz target filename for sbatlevel parser not directly visible from oss-fuzz/projects/fwupd contents."
+    },
+    {
+      "id": "ghidra-cplus-demangle-oom",
+      "project": "Ghidra",
+      "title": "OOM in cplus_demangle due to malformed symbol",
+      "upstream_report": "https://github.com/NationalSecurityAgency/ghidra/security/advisories/GHSA-m94m-fqr3-x442",
+      "bug_class": "oom",
+      "target": {
+        "repo": "https://github.com/NationalSecurityAgency/ghidra",
+        "vuln_commit": "caeeac88ddb5b004736de440db86380ff6e61229",
+        "disclosed": "2026-02-11"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": "fuzz_rust_demangle.c",
+        "notes": "Ghidra is not in OSS-Fuzz; the libFuzzer harness fuzz_rust_demangle.c shown in the advisory targets GPL/DemanglerGnu/src/demangler_gnu_v2_41/c/rust-demangle.c. Ghidra's 'fix' is adding a process-level timeout (not patching the demangler)."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Both ghidra-cplus-demangle-oom and ghidra-rust-demangle-oom are closed by the same advisory GHSA-m94m-fqr3-x442 and 'fixed' by the same commit 42e8ad7 (GP-6408: Demangler GNU analyzer timeout option), not by patching the underlying demangler code. The disclosed date is the advisory publish date."
+    },
+    {
+      "id": "ghidra-rust-demangle-oom",
+      "project": "Ghidra",
+      "title": "OOM in rust_demangle due to nested generic parameters",
+      "upstream_report": "https://github.com/NationalSecurityAgency/ghidra/security/advisories/GHSA-m94m-fqr3-x442",
+      "bug_class": "oom",
+      "target": {
+        "repo": "https://github.com/NationalSecurityAgency/ghidra",
+        "vuln_commit": "caeeac88ddb5b004736de440db86380ff6e61229",
+        "disclosed": "2026-02-11"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": "fuzz_rust_demangle.c",
+        "notes": "Ghidra is not in OSS-Fuzz; harness was authored by FuzzingBrain and targets GPL/DemanglerGnu/src/demangler_gnu_v2_41/c/rust-demangle.c."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Same fix commit as ghidra-cplus-demangle-oom (process-level timeout, not a code patch)."
+    },
+    {
+      "id": "graaljs-illformed-locale",
+      "project": "graaljs",
+      "title": "IllformedLocaleException treated as Internal Error in Intl API",
+      "upstream_report": "https://github.com/oracle/graaljs/issues/985",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/oracle/graaljs",
+        "vuln_commit": "c40b7076eacf991da98a42007cc85bb40ec1e37c",
+        "disclosed": "2026-01-13"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": null,
+        "notes": "graaljs is not in OSS-Fuzz; harness is FuzzingBrain-authored Jazzer wrapper."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Fix is a merge commit (PullRequest: js/3678); vuln_commit is the first parent of the merge. Disclosed date approximated to the issue creation period; exact date not retrieved."
+    },
+    {
+      "id": "graaljs-regexlexer-oob",
+      "project": "graaljs",
+      "title": "StringIndexOutOfBoundsException in RegexLexer.consumeChar causes Internal Error",
+      "upstream_report": "https://github.com/oracle/graaljs/issues/986",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/oracle/graal",
+        "vuln_commit": "55132ca950d201b5552ce8f8a1677b41ac80a7fc",
+        "disclosed": "2026-01-13"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": null,
+        "notes": "RegexLexer lives in oracle/graal (the TRegex/Truffle component), not oracle/graaljs. Bug reported against graaljs but fix landed in graal. graaljs is not in OSS-Fuzz."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Cross-repo: report in oracle/graaljs, fix in oracle/graal (commit 09eadacd, PullRequest graal/23146). Build will need to track graaljs's pinned graal submodule/version."
+    },
+    {
+      "id": "harfbuzz-fontations-oob-write",
+      "project": "harfbuzz",
+      "title": "OOB Write in HarfBuzz fontations Glyph-Name Callback with size == 0",
+      "upstream_report": "https://github.com/harfbuzz/harfbuzz/issues/5946",
+      "bug_class": "oob-write",
+      "target": {
+        "repo": "https://github.com/harfbuzz/harfbuzz",
+        "vuln_commit": "edc8c18ef88262fc467a30ab74f05080d6aea6cf",
+        "disclosed": "2026-04-18"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/harfbuzz",
+        "harness_file": "hb-shape-fuzzer.cc",
+        "notes": "HarfBuzz has multiple fuzzers (hb-shape, hb-subset, hb-vector, hb-raster, hb-repacker, hb-gpu). The fontations glyph-name OOB likely triggers via hb-shape-fuzzer; harness file lives at test/fuzzing/hb-shape-fuzzer.cc."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file best-guess (hb-shape-fuzzer.cc); could also be hb-subset-fuzzer.cc."
+    },
+    {
+      "id": "icu-translit-rule-uaf",
+      "project": "icu",
+      "title": "Use-After-Free / Null Pointer Dereference in TransliterationRule Destructor",
+      "upstream_report": "https://unicode-org.atlassian.net/browse/ICU-23365",
+      "bug_class": "use-after-free",
+      "target": {
+        "repo": "https://github.com/unicode-org/icu",
+        "vuln_commit": "8be6575f5c4ea397d384493a435b2932d5c2eaca",
+        "disclosed": null
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/icu",
+        "harness_file": "transliterator_fuzzer.cpp",
+        "notes": "OSS-Fuzz ICU builds all *_fuzzer.cpp files under icu4c/source/test/fuzzer/. Best-guess for TransliterationRule UAF is transliterator_fuzzer.cpp."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "ICU Jira (ICU-23365) is not publicly accessible without login - disclosed date unknown. Follow-up PR #3944 added a unit test and zero-init refactor (commit 10fc3f3f) - PR #3936 is the primary fix."
+    },
+    {
+      "id": "imagemagick-msl-comment-npd",
+      "project": "ImageMagick",
+      "title": "NULL pointer dereference in MSL comment tag",
+      "upstream_report": "https://github.com/ImageMagick/ImageMagick/security/advisories/GHSA-5vx3-wx4q-6cj8",
+      "bug_class": "null-deref",
+      "target": {
+        "repo": "https://github.com/ImageMagick/ImageMagick",
+        "vuln_commit": "cbc802d38b2d37a4ae101c6ef80a465678cc6a49",
+        "disclosed": "2026-01-20"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/imagemagick",
+        "harness_file": null,
+        "notes": "OSS-Fuzz ImageMagick uses oss-fuzz/build.sh from upstream; specific MSL harness file is inside ImageMagick repo (e.g. fuzz/coder_fuzzer.cc)."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Disclosed date is the advisory publish date (2026-01-20); fix commit predates publication. Harness file not directly visible from oss-fuzz project dir."
+    },
+    {
+      "id": "imagemagick-msl-stack-overflow",
+      "project": "ImageMagick",
+      "title": "Stack overflow via recursive MSL write",
+      "upstream_report": "https://github.com/ImageMagick/ImageMagick/security/advisories/GHSA-9vj4-wc7r-p844",
+      "bug_class": "stack-overflow",
+      "target": {
+        "repo": "https://github.com/ImageMagick/ImageMagick",
+        "vuln_commit": "1eefab41bc0ab1c6c2c1fd3e4a49e3ee1849751d",
+        "disclosed": "2026-01-19"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/imagemagick",
+        "harness_file": null,
+        "notes": "OSS-Fuzz uses upstream-defined oss-fuzz/build.sh; MSL recursion harness not directly identifiable from oss-fuzz project dir."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Disclosed date is advisory publish date (later than fix commit which landed during the embargo period)."
+    },
+    {
+      "id": "jq-dump-op-npd",
+      "project": "jq",
+      "title": "NULL Pointer Dereference in dump_operation",
+      "upstream_report": "https://github.com/jqlang/jq/issues/3458",
+      "bug_class": "null-deref",
+      "target": {
+        "repo": "https://github.com/jqlang/jq",
+        "vuln_commit": "d44baeb67ac21b3ff23ede8d103c21c8830ea8dd",
+        "disclosed": "2026-02-22"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/jq",
+        "harness_file": "jq_fuzz_compile.c",
+        "notes": "dump_operation is in compiler/bytecode; jq_fuzz_compile.c exercises compile path. Could also be jq_fuzz_execute.cpp."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Disclosed date is best-effort from issue/PR creation; harness file is best-guess."
+    },
+    {
+      "id": "jsonjava-jsonml-classcast",
+      "project": "json-java",
+      "title": "ClassCastException in JSONML.toJSONArray due to unsafe type cast",
+      "upstream_report": "https://github.com/stleary/JSON-java/issues/1034",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/stleary/JSON-java",
+        "vuln_commit": "e635f4023811c80c02b38428ec58e42b397f820f",
+        "disclosed": "2026-01-29"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/json-java",
+        "harness_file": "JsonJavaFuzzer.java",
+        "notes": "OSS-Fuzz JSON-java uses JsonJavaFuzzer.java (single Jazzer harness covering all parsers)."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": false,
+      "review_notes": null
+    },
+    {
+      "id": "jsonjava-unescape-numformat",
+      "project": "json-java",
+      "title": "NumberFormatException in XMLTokener.unescapeEntity due to missing input validation",
+      "upstream_report": "https://github.com/stleary/JSON-java/issues/1036",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/stleary/JSON-java",
+        "vuln_commit": "e635f4023811c80c02b38428ec58e42b397f820f",
+        "disclosed": "2026-01-29"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/json-java",
+        "harness_file": "JsonJavaFuzzer.java",
+        "notes": "Same Jazzer harness as other JSON-java bugs."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "PR #1038 fixes both jsonjava-unescape-strindex (#1035) and jsonjava-unescape-numformat (#1036) in the same commit."
+    },
+    {
+      "id": "jsonjava-unescape-strindex",
+      "project": "json-java",
+      "title": "StringIndexOutOfBoundsException in XMLTokener.unescapeEntity due to missing length check",
+      "upstream_report": "https://github.com/stleary/JSON-java/issues/1035",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/stleary/JSON-java",
+        "vuln_commit": "e635f4023811c80c02b38428ec58e42b397f820f",
+        "disclosed": "2026-01-29"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/json-java",
+        "harness_file": "JsonJavaFuzzer.java",
+        "notes": "Same Jazzer harness as other JSON-java bugs; XML path exercised inside JsonJavaFuzzer."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "PR #1038 fixes both jsonjava-unescape-strindex (#1035) and jsonjava-unescape-numformat (#1036) in a single commit."
+    },
+    {
+      "id": "libavif-jni-signext",
+      "project": "libavif",
+      "title": "Heap Buffer Overflow in libavif Android JNI via Signed-Int Length Sign-Extension",
+      "upstream_report": "https://github.com/AOMediaCodec/libavif/issues/3177",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/AOMediaCodec/libavif",
+        "vuln_commit": "b357f083ea5ae0ee7b09a65a48621f345e710588",
+        "disclosed": "2026-04-18"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/libavif",
+        "harness_file": null,
+        "notes": "Bug is in the Android JNI shim - not directly exercised by OSS-Fuzz which runs Linux libFuzzer; FuzzingBrain harness exercises the JNI entry points via a custom wrapper."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Vulnerability is JNI-specific; OSS-Fuzz libavif targets the C API. Harness used by FuzzingBrain is custom."
+    },
+    {
+      "id": "mongoose-mg-match-overflow",
+      "project": "mongoose",
+      "title": "Heap Buffer Overflow in mg_match",
+      "upstream_report": "https://github.com/cesanta/mongoose/issues/3393",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/cesanta/mongoose",
+        "vuln_commit": "b313d697ff8c2156e85d411d7b3c226e4a0fefa9",
+        "disclosed": "2026-01-07"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/mongoose",
+        "harness_file": "fuzz_security.c",
+        "notes": "OSS-Fuzz mongoose project ships test/fuzz.c and fuzz_netdriver_http.c; the issue's stack trace shows /src/mongoose/fuzz_security.c which is a FuzzingBrain-authored harness placed in the project root for OSS-Fuzz invocation."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Reporter stack trace references fuzz_security.c at /src/mongoose - this is a FuzzingBrain custom harness, not one of upstream OSS-Fuzz's two harnesses (fuzz from test/fuzz.c, or fuzz_netdriver_http)."
+    },
+    {
+      "id": "ndpi-hex-decode-sscanf",
+      "project": "ndpi",
+      "title": "nDPI ndpi_hex_decode Unbounded sscanf Over Borrowed Buffer (TLS Block Parser)",
+      "upstream_report": "https://github.com/ntop/nDPI/issues/3159",
+      "bug_class": "oob-read",
+      "target": {
+        "repo": "https://github.com/ntop/nDPI",
+        "vuln_commit": "68c7159a72dee1c42988eed65c7bfa08c510002e",
+        "disclosed": "2026-04-18"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/ndpi",
+        "harness_file": null,
+        "notes": "OSS-Fuzz nDPI uses ndpi/tests/ossfuzz.sh which builds many fuzzers (fuzz_alg_*, fuzz_dga, fuzz_protocols, etc.). The TLS block parser harness is likely fuzz_protocols.c or a TLS-specific target; PR 3163 added new harnesses too."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); PR title 'add targeted parser harnesses' suggests the fix PR also added a new harness for this case (likely upstream-now). The triggering harness used by FuzzingBrain may have been custom prior to the fix."
+    },
+    {
+      "id": "netsnmp-vacm-parse-npd",
+      "project": "net-snmp",
+      "title": "NULL Pointer Dereference in vacm_parse_config_group",
+      "upstream_report": "https://github.com/net-snmp/net-snmp/issues/1052",
+      "bug_class": "null-deref",
+      "target": {
+        "repo": "https://github.com/net-snmp/net-snmp",
+        "vuln_commit": "fc28b88a64b7739d76c73058c3811d5387851c32",
+        "disclosed": "2026-02-19"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/net-snmp",
+        "harness_file": "snmp_mib_fuzzer.c",
+        "notes": "OSS-Fuzz net-snmp ships one fuzzer (snmp_mib_fuzzer) but the bug is in VACM config parsing, not MIB parsing - the triggering harness may be FuzzingBrain-authored or a different upstream test."
+      },
+      "harness_provenance": "unknown",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "OSS-Fuzz integration uses snmp_mib_fuzzer which targets MIB parsing; bug is in vacm_parse_config_group (config file parsing). Harness used by FuzzingBrain likely custom."
+    },
+    {
+      "id": "opencv-yaml-parsekey",
+      "project": "opencv",
+      "title": "Heap buffer overflow in YAML parser parseKey() when key is empty",
+      "upstream_report": "https://github.com/opencv/opencv/issues/28619",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/opencv/opencv",
+        "vuln_commit": "1a3e1e05b71e15197f7decc451a2f650ff2ee591",
+        "disclosed": "2026-03-09"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/opencv",
+        "harness_file": "filestorage_read_string_fuzzer.cc",
+        "notes": "OpenCV YAML parsing goes through FileStorage; OSS-Fuzz has filestorage_read_*_fuzzer.cc variants. parseKey() OOB on empty key is most reachable via filestorage_read_string_fuzzer.cc or filestorage_read_file_fuzzer.cc."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file is best-guess among three filestorage_read_* fuzzers."
+    },
+    {
+      "id": "openldap-ldif-stack-underflow",
+      "project": "openldap",
+      "title": "Stack Buffer Underflow in ldif_read_record",
+      "upstream_report": "https://bugs.openldap.org/show_bug.cgi?id=10431",
+      "bug_class": "stack-buffer-underflow",
+      "target": {
+        "repo": "https://github.com/openldap/openldap",
+        "vuln_commit": "2c5388b2da73f4293b3b6c236b2de597b6272d50",
+        "disclosed": "2026-01-27"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": null,
+        "notes": "openldap is not in OSS-Fuzz; harness is FuzzingBrain-authored."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": false,
+      "review_notes": null
+    },
+    {
+      "id": "openldap-parse-whsp",
+      "project": "openldap",
+      "title": "Heap Buffer Overflow in Schema Parser parse_whsp",
+      "upstream_report": "https://bugs.openldap.org/show_bug.cgi?id=10430",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/openldap/openldap",
+        "vuln_commit": "5129517b6956f4679b110af854e04f0d3f7be576",
+        "disclosed": "2026-01-27"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": false,
+        "project_dir": null,
+        "harness_file": null,
+        "notes": "openldap is not in OSS-Fuzz; harness is FuzzingBrain-authored."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Fix also backported to RE26 branch as afda4781 (2026-02-13)."
+    },
+    {
+      "id": "cups-utf8-charset-overflow",
+      "project": "OpenPrinting CUPS",
+      "title": "Heap buffer overflow in cupsUTF8ToCharset when processing truncated UTF-8 sequences",
+      "upstream_report": "https://github.com/OpenPrinting/cups/issues/1438",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/OpenPrinting/cups",
+        "vuln_commit": "2e818010c9cda04649c872646dd3b90686e309ab",
+        "disclosed": "2025-11-28"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/cups",
+        "harness_file": null,
+        "notes": "OSS-Fuzz cups uses test_patch.diff applied to the cups source tree to build fuzzers (the fuzzers live in OpenPrinting/fuzzing repo). cupsUTF8ToCharset fuzzer not directly identifiable."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Backported also to 2.4.x branch (commit 93c39a4be). Disclosed date inferred from issue creation around 2025-11-28."
+    },
+    {
+      "id": "openssl-des-ofb-cfb-overread",
+      "project": "openssl",
+      "title": "Stack Buffer Over-Read in DES OFB/CFB64 via Unchecked num Parameter",
+      "upstream_report": "https://github.com/openssl/openssl/issues/30284",
+      "bug_class": "stack-buffer-overread",
+      "target": {
+        "repo": "https://github.com/openssl/openssl",
+        "vuln_commit": "22be3f1b8e3d8d09de89794a6d59f00176b32b2d",
+        "disclosed": "2026-03-09"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/openssl",
+        "harness_file": null,
+        "notes": "OSS-Fuzz openssl builds all executables found in fuzz/ directory of the openssl source tree. No existing fuzzer specifically exercises DES OFB/CFB64 num parameter - this likely required a custom harness."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Original PR #30332 was closed unmerged (head 39c246e); fix applied directly as commit 134342e on master. Also backported to a stable branch (76e891f). No matching existing OSS-Fuzz harness for this code path."
+    },
+    {
+      "id": "ots-processgeneric-npd",
+      "project": "ots",
+      "title": "NULL Pointer Dereference in OTS ProcessGeneric() with TABLE_ACTION_PASSTHRU",
+      "upstream_report": "https://github.com/khaledhosny/ots/issues/308",
+      "bug_class": "null-deref",
+      "target": {
+        "repo": "https://github.com/khaledhosny/ots",
+        "vuln_commit": "8510bfd8c95350fc022552940a45120ff6e737b5",
+        "disclosed": "2026-04-11"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/ots",
+        "harness_file": "ots-fuzzer.cc",
+        "notes": "OTS has a single fuzzer 'ots-fuzzer'."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); PR #309 contains two sequential commits on master: 36eea1dc (initial fix) and 35ec4294 (review address). fixed_commit is the final head (= merge head)."
+    },
+    {
+      "id": "pdfbox-cmap-bfrange-aioob",
+      "project": "pdfbox",
+      "title": "ArrayIndexOutOfBoundsException in fontbox CMapParser.increment() via Malformed bfrange",
+      "upstream_report": "https://github.com/apache/pdfbox/pull/411",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/apache/pdfbox",
+        "vuln_commit": "159ae247091fe217e5f6a1e174946b225b72adbb",
+        "disclosed": "2026-01-30"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/pdfbox",
+        "harness_file": null,
+        "notes": "CMap parsing is in fontbox; specific Jazzer harness not directly identifiable."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Maintainer cherry-picked from PR #411 directly to trunk as svn commit r1931613 (sha 488685a2)."
+    },
+    {
+      "id": "pdfbox-inlineimage-type-confusion",
+      "project": "pdfbox",
+      "title": "Type Confusion DoS in PDInlineImage.getDecode",
+      "upstream_report": "https://github.com/apache/pdfbox/pull/410",
+      "bug_class": "type-confusion",
+      "target": {
+        "repo": "https://github.com/apache/pdfbox",
+        "vuln_commit": "c83691fd49a05b854918381dac08df7ec6db57ec",
+        "disclosed": "2026-01-30"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/pdfbox",
+        "harness_file": null,
+        "notes": "PDFBox OSS-Fuzz builds Jazzer harnesses from fuzz-targets/*Fuzzer.java. Image-parser harness likely an ImageFuzzer or similar."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Maintainer cherry-picked the fix from PR #410 as svn commit r1931610 (GitHub mirror sha 159ae247) directly to trunk; PR was closed unmerged but reported as 'closes #410' in commit message."
+    },
+    {
+      "id": "pdfbox-pfb-negative-array",
+      "project": "pdfbox",
+      "title": "NegativeArraySizeException in fontbox PfbParser.parsePfb via Crafted PFB Header Size Field",
+      "upstream_report": "https://github.com/apache/pdfbox/pull/412",
+      "bug_class": "uncaught-exception",
+      "target": {
+        "repo": "https://github.com/apache/pdfbox",
+        "vuln_commit": "4672850ee7eb44c3356499cd44254bdf5b6eb9eb",
+        "disclosed": "2026-01-30"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/pdfbox",
+        "harness_file": null,
+        "notes": "PfbParser is in fontbox; specific Jazzer harness not directly identifiable."
+      },
+      "harness_provenance": "oss-fuzz",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Fix was applied across three branches (trunk r1931624 = 205b190e, branches/3.0 r1931622 = 410b6eed, and 2.0). trunk commit selected as fixed_commit."
+    },
+    {
+      "id": "simdutf-utf16-utf8-overflow",
+      "project": "simdutf",
+      "title": "Heap buffer overflow in convert_utf16_to_utf8_safe due to write-before-check pattern",
+      "upstream_report": "https://github.com/simdutf/simdutf/issues/911",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/simdutf/simdutf",
+        "vuln_commit": "16305c1ed42f6aa310c5a60689690ee8ddfa3d22",
+        "disclosed": "2026-01-11"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/simdutf",
+        "harness_file": null,
+        "notes": "OSS-Fuzz simdutf delegates to fuzz/build.sh in the upstream repo. Follow-up PR #916 added a dedicated fuzzer for convert_*_safe() functions - prior to that, no upstream harness covered this code path."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "PR #913 ('verifies issue 911') and PR #916 ('add fuzzer for convert_*_safe() functions') landed alongside the fix - the convert_*_safe fuzzer is new, so the discovery harness was FuzzingBrain-authored."
+    },
+    {
+      "id": "upx-elf32-pack2-memleak",
+      "project": "upx",
+      "title": "Memory Leak in UPX PackLinuxElf32::pack2 when packing ELF executables",
+      "upstream_report": "https://github.com/upx/upx/issues/945",
+      "bug_class": "memory-leak",
+      "target": {
+        "repo": "https://github.com/upx/upx",
+        "vuln_commit": null,
+        "disclosed": "2025-12-09"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/upx",
+        "harness_file": null,
+        "notes": "OSS-Fuzz upx builds *_fuzzer.cpp targets from $SRC. FuzzingBrain authored a pack-file fuzzer (visible in issue body) targeting compression paths not covered by existing decompression fuzzers."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "(some review notes were patch-related and may now be moot under description-only framing); Maintainer closed issue with comment 'Done' but no commit was referenced. Memory leak is in ElfLinker::addLoader (linker.cpp). No matching commit found between 2025-12-08 and 2025-12-12 via git log or commit search. May be unfixed-but-marked-fixed, or fixed silently inside a large rebase commit."
+    },
+    {
+      "id": "upx-elf64-generate-overflow",
+      "project": "upx",
+      "title": "Heap Buffer Overflow in UPX PackLinuxElf64::generateElfHdr when packing malformed ELF64",
+      "upstream_report": "https://github.com/upx/upx/issues/947",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/upx/upx",
+        "vuln_commit": "1ebd3356f36780960a03354a8ded23410ebc7e79",
+        "disclosed": "2025-12-13"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/upx",
+        "harness_file": null,
+        "notes": "Same FuzzingBrain pack-file fuzzer as other upx entries."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file not in upstream oss-fuzz; FuzzingBrain custom pack-file fuzzer."
+    },
+    {
+      "id": "upx-pe-loadconf-overflow",
+      "project": "upx",
+      "title": "Heap Buffer Overflow in UPX PeFile::processLoadConf when packing malformed PE32 files",
+      "upstream_report": "https://github.com/upx/upx/issues/950",
+      "bug_class": "heap-buffer-overflow",
+      "target": {
+        "repo": "https://github.com/upx/upx",
+        "vuln_commit": "ab98f61bbd784b9654118613996bc145a764a682",
+        "disclosed": "2025-12-15"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/upx",
+        "harness_file": null,
+        "notes": "Same FuzzingBrain pack-file fuzzer as other upx entries."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Harness file not in upstream oss-fuzz; FuzzingBrain custom pack-file fuzzer."
+    },
+    {
+      "id": "upx-pe-resource-memleak",
+      "project": "upx",
+      "title": "Memory Leak in UPX PeFile::Resource::convert() when processing PE resources",
+      "upstream_report": "https://github.com/upx/upx/issues/946",
+      "bug_class": "memory-leak",
+      "target": {
+        "repo": "https://github.com/upx/upx",
+        "vuln_commit": null,
+        "disclosed": "2025-12-10"
+      },
+      "oss_fuzz": {
+        "in_oss_fuzz": true,
+        "project_dir": "projects/upx",
+        "harness_file": null,
+        "notes": "Same pack-file fuzzer as upx-elf32-pack2-memleak; not the upstream decompression fuzzer."
+      },
+      "harness_provenance": "fuzzingbrain",
+      "expected_function": null,
+      "needs_review": true,
+      "review_notes": "Maintainer closed issue with 'Done' but no commit referenced. No matching commit message search hit. Status uncertain."
+    }
+  ]
+}
