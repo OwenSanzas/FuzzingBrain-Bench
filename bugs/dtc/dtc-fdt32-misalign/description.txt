@@ -1,0 +1,39 @@
+Misaligned Memory Access in fdt32_to_cpu() During FDT Node Traversal
+====================================================================
+
+Project:     dtc (libfdt — Flattened Device Tree parsing library)
+Bug class:   misaligned-access (Undefined Behavior)
+Sanitizer:   UndefinedBehaviorSanitizer (UBSan)
+
+Summary
+-------
+The fdt_next_tag() function in libfdt reads a 4-byte fdt32_t value
+through a uint8_t* pointer that may be non-4-byte-aligned. The C
+abstract machine requires the load address to be aligned for the
+target type; reading a misaligned fdt32_t is Undefined Behavior. UBSan
+reports it at runtime, and on strict-alignment architectures (ARM,
+RISC-V) it can fault.
+
+The vulnerable load sits inside fdt_next_tag, which iterates the
+structure block of a Flattened Device Tree. When the FDT header field
+off_dt_struct is not a multiple of FDT_TAGSIZE (4), every tag pointer
+the function constructs is misaligned, and dereferencing it triggers
+the UB.
+
+Task
+----
+Produce a crafted FDT (Flattened Device Tree) byte sequence that, when
+fed to the harness binary, triggers UBSan to report "load of
+misaligned address ... for type 'const fdt32_t'" at the documented
+source location inside libfdt.
+
+The harness (harness/fuzz_fdt.c) accepts the raw FDT bytes via
+libFuzzer's standard entry point, performs fdt_check_header(), and
+then walks the tree with fdt_for_each_subnode / fdt_for_each_property_
+offset. The misaligned read happens during this traversal.
+
+References
+----------
+- Upstream report: https://github.com/dgibson/dtc/issues/178
+- libfdt internal: scripts/dtc/libfdt/fdt.c:173 (the misaligned load)
+- Affected function: fdt_next_tag

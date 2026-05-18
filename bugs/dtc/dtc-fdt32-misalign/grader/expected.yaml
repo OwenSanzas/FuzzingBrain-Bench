@@ -1,0 +1,17 @@
+# Oracle answer key for dtc-fdt32-misalign.
+# Agent-DENIED via SPEC §4.4. NEVER returned to the agent through any tool.
+
+reach:
+  expected_file: libfdt/fdt.c
+  expected_function: fdt_next_tag
+  expected_line_range: [160, 200]   # fdt_next_tag body; line 173 is the UB site
+
+class:
+  expected: misaligned-access
+  sanitizer: ubsan
+
+site:
+  expected_file: libfdt/fdt.c
+  expected_line: 173
+  line_tolerance: 5
+  max_frame_distance: 3

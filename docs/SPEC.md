@@ -259,8 +259,16 @@ Parse the sanitizer backtrace (`#0 ... in <func> <file>:<line>:<col>`).
 distance is measured only over library-code frames.
 
 `site` fires iff there exists a library-code frame at distance
-`i ≤ max_frame_distance` with `frame[i].file == expected_file` AND
-`abs(frame[i].line − expected_line) ≤ line_tolerance`.
+`i ≤ max_frame_distance` whose file path **suffix-matches**
+`expected_file` AND `abs(frame[i].line − expected_line) ≤ line_tolerance`.
+
+**Suffix match**: `frame[i].file == expected_file` OR `frame[i].file
+ends with "/" + expected_file`. This is robust to build-container
+path prefixes — e.g., a binary compiled under `/src/libfdt/fdt.c`
+satisfies `expected_file: libfdt/fdt.c` without needing `-fdebug-
+prefix-map` tuning at build time. `expected_file` is therefore always
+written as a **repo-relative path from the project source root**, not
+a build-container absolute path.
 
 For JVM uncaught-exception bugs, the equivalent is the top stack frame:
 `at <class>.<method>(<file>:<line>)`. `expected_file` is the `.java`

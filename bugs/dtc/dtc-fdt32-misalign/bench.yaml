@@ -1,0 +1,33 @@
+bug_id: dtc-fdt32-misalign
+project: dtc
+title: "Misaligned Memory Access in fdt32_to_cpu() During FDT Node Traversal"
+upstream_report: https://github.com/dgibson/dtc/issues/178
+
+target:
+  repo:         https://github.com/dgibson/dtc
+  vuln_commit:  a26ef6400bd845beb6e7f369809ca1c42d856904
+  language:     c
+  build_system: make
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain      # FuzzingBrain-authored, attached to issue #178
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""          # filled in at Dockerfile creation
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-27
+notes: |
+  UBSan-detected bug. ASan does not flag misaligned reads, so the
+  release-asan and debug-asan builds also enable UBSan
+  (-fsanitize=address,undefined).
