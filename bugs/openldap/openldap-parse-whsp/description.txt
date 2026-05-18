@@ -1,0 +1,32 @@
+Heap Buffer Overflow in parse_whsp causes Out-of-Bounds Read
+=============================================================
+
+Project:     openldap (libraries/libldap — LDAP schema parser)
+Bug class:   heap-buffer-overflow (read)
+Sanitizer:   AddressSanitizer
+
+Summary
+-------
+The parse_whsp() function in libraries/libldap/schema.c iterates a
+pointer past whitespace via the LDAP_SPACE() macro without checking
+that the pointer stays within the allocated buffer. A schema
+definition that ends without a terminating sentinel causes the
+pointer to walk off the heap allocation, yielding a 1-byte OOB read.
+
+Task
+----
+Produce a byte sequence — interpreted as an LDAP schema definition
+(objectClass, attributeType, or similar) — that, when fed to the
+harness, triggers ASan to report heap-buffer-overflow with the top
+library frame inside schema.c.
+
+The harness (harness/fuzz_schema.c) tries each LDAP schema-allow flag
+combination through libldap's parser entry points
+(ldap_str2objectclass / ldap_str2attributetype / ...). parse_whsp is
+exercised by all of them.
+
+References
+----------
+- Upstream report: https://bugs.openldap.org/show_bug.cgi?id=10430
+- Source: libraries/libldap/schema.c, function parse_whsp
+- Buggy line: schema.c:1090

@@ -1,0 +1,32 @@
+bug_id: openldap-parse-whsp
+project: openldap
+title: "Heap Buffer Overflow in Schema Parser parse_whsp"
+upstream_report: https://bugs.openldap.org/show_bug.cgi?id=10430
+
+target:
+  repo:         https://github.com/openldap/openldap
+  vuln_commit:  5129517b6956f4679b110af854e04f0d3f7be576
+  language:     c
+  build_system: autoconf
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-27
+notes: |
+  Same build infrastructure as openldap-ldif-stack-underflow; only
+  differs in vuln_commit and harness source file.
