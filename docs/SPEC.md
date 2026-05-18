@@ -86,8 +86,8 @@ Out of scope in v1:
 
 ### 1.3 Corpus
 
-**Forty fixed-status bugs** across the projects catalogued in
-`docs/bugs.json` (the 42 fixed entries minus the 2 dropped in §1.2).
+**Thirty-nine fixed-status bugs** across the projects catalogued in
+`docs/bugs.json` (the 42 fixed entries minus the 3 dropped in §1.2).
 Per-bug runnable artifacts live in `bugs/<project>/<bug_id>/`. Per-bug
 version metadata is in `docs/bench-corpus.json`.
 
@@ -95,7 +95,7 @@ Bug-class distribution of the v1 corpus (informational):
 
 | Class | Count |
 |---|---|
-| heap-buffer-overflow | 8 |
+| heap-buffer-overflow | 7 |
 | uncaught-exception (JVM) | 7 |
 | oom | 5 |
 | null-deref | 4 |
@@ -105,8 +105,9 @@ Bug-class distribution of the v1 corpus (informational):
 | oob-read | 2 |
 | other — 1 each (UAF, OOB-write, misaligned-access, integer-underflow, stack-buffer-underflow, stack-buffer-overread, type-confusion) | 7 |
 
-(`heap-buffer-overflow` dropped from 9 to 8 by removing `njs-atod2-overflow`;
-`open-redirect` removed entirely by dropping `cups-oauth-open-redirect`.)
+(`heap-buffer-overflow` dropped from 9 to 7: −1 for `njs-atod2-overflow`,
+−1 for `cups-utf8-charset-overflow`; `open-redirect` removed entirely
+by dropping `cups-oauth-open-redirect`.)
 
 This heterogeneity is the reason §2's ladder is shorter than ExploitBench's:
 not every flag applies to every bug, and forcing V8-style engine-primitive
