@@ -1,0 +1,29 @@
+bug_id: pdfbox-pfb-negative-array
+project: pdfbox
+title: "NegativeArraySizeException in fontbox PfbParser.parsePfb via Crafted PFB Header Size Field"
+upstream_report: https://github.com/apache/pdfbox/pull/412
+
+target:
+  repo:         https://github.com/apache/pdfbox
+  vuln_commit:  4672850ee7eb44c3356499cd44254bdf5b6eb9eb
+  language:     java
+  build_system: maven
+
+harness:
+  type: java
+  entrypoint: PfbFuzzer.fuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 256
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-30

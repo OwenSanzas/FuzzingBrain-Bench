@@ -1,0 +1,14 @@
+reach:
+  expected_file: fontbox/src/main/java/org/apache/fontbox/pfb/PfbParser.java
+  expected_function: parsePfb
+  expected_line_range: [140, 200]
+
+class:
+  expected: uncaught-exception
+  sanitizer: jvm
+
+site:
+  expected_file: PfbParser.java
+  expected_line: 162
+  line_tolerance: 30
+  max_frame_distance: 5
