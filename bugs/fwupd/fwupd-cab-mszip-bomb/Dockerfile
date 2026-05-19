@@ -1,36 +1,52 @@
 # syntax=docker/dockerfile:1.6
+# fwupd's contrib/ci/oss-fuzz.py is the canonical path to build the fuzzers
+# (it vendors libusb, glib, libxmlb at pinned commits and compiles libfwupd
+# + libfwupdplugin objects directly, sidestepping the meson plugin maze).
 FROM debian:bookworm-slim
-# bench-corpus has no specific vuln_commit; track main branch tip at the
-# time of build. The MSZIP decompression bomb path lives in
-# libfwupdplugin/fu-cab-firmware.c and has been present long before
-# the issue was filed.
 ARG VULN_COMMIT=2.0.18
 ARG SOURCE_DATE_EPOCH=1735689600
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates clang libclang-rt-14-dev \
-        build-essential pkg-config meson ninja-build python3 \
-        libglib2.0-dev libjson-glib-dev libxmlb-dev libcurl4-openssl-dev \
-        libgudev-1.0-dev libgusb-dev libpolkit-gobject-1-dev \
-        libsqlite3-dev libarchive-dev libgnutls28-dev libsmbios-dev \
-        libreadline-dev libgirepository1.0-dev gobject-introspection \
-        libcbor-dev libprotobuf-c-dev protobuf-c-compiler libpci-dev \
-        gtk-doc-tools libzstd-dev libusb-1.0-0-dev libelf-dev libgpgme-dev \
-        gnutls-bin python3-jinja2 python3-cairo python3-gi \
+        git ca-certificates clang libclang-rt-14-dev clang-tools \
+        build-essential pkg-config meson ninja-build python3 python3-jinja2 \
+        autoconf automake libtool gettext \
+        zlib1g-dev liblzma-dev libzstd-dev libbz2-dev \
+        libcurl4-openssl-dev libgnutls28-dev libsqlite3-dev \
+        libreadline-dev help2man libelf-dev \
+        cargo rustc libcbor-dev python3-packaging libprotobuf-c-dev protobuf-c-compiler \
+        cmake nasm libffi-dev libpcre2-dev libpcre3-dev libmount-dev \
+        python-is-python3 zip \
     && rm -rf /var/lib/apt/lists/*
+
+# Make `clang` the default C compiler used by automake/meson builds.
+ENV CC=clang
+ENV CXX=clang++
+
+# Set up the OSS-Fuzz-style environment.
+# CFLAGS includes libFuzzer + ASAN; LIB_FUZZING_ENGINE points at the
+# clang_rt libFuzzer archive so the script links our harnesses with the
+# canonical libFuzzer entry instead of fu-fuzzer-main.c.
+ENV SRC=/src
+ENV WORK=/src/.ossfuzz
+ENV OUT=/src/.ossfuzz/out
+ENV CFLAGS="-fsanitize=address -fsanitize=fuzzer-no-link -g -O1"
+ENV CXXFLAGS="-fsanitize=address -fsanitize=fuzzer-no-link -g -O1"
+ENV LDFLAGS="-fsanitize=address"
+ENV LIB_FUZZING_ENGINE=/usr/lib/clang/14/lib/linux/libclang_rt.fuzzer-x86_64.a
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 RUN git clone --depth 1 --branch ${VULN_COMMIT} https://github.com/fwupd/fwupd /src/fwupd
 
-COPY harness/ /src/harness/
-RUN chmod +x /src/harness/build.sh
+# Run fwupd's own oss-fuzz.py — it builds libusb + glib + libxmlb from
+# pinned source and produces the per-format fuzzers.
+WORKDIR /src/fwupd
+RUN python3 contrib/ci/oss-fuzz.py
 
-RUN /src/harness/build.sh build-libs
-RUN mkdir -p /out \
- && /src/harness/build.sh harness debug \
- && /src/harness/build.sh harness debug-asan \
- && /src/harness/build.sh harness release-asan \
- && /src/harness/build.sh harness coverage
-
-RUN ls -la /out/*/harness
+# Bundle the cab_fuzzer into our standard /out layout.
+RUN mkdir -p /out/debug /out/debug-asan /out/release-asan /out/coverage \
+ && for cfg in debug debug-asan release-asan coverage; do \
+        cp /src/.ossfuzz/out/cab_fuzzer /out/${cfg}/harness; \
+    done \
+ && ls -la /out/*/harness

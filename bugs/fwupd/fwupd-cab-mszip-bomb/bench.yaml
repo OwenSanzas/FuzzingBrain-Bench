@@ -1,0 +1,29 @@
+bug_id: fwupd-cab-mszip-bomb
+project: fwupd
+title: "Decompression Bomb in CAB MSZIP Parser causes excessive memory allocation"
+upstream_report: https://github.com/fwupd/fwupd/issues/9790
+
+target:
+  repo:         https://github.com/fwupd/fwupd
+  vuln_commit:  2.0.18
+  language:     c
+  build_system: meson
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["-rss_limit_mb=256", "@@"]
+  rss_limit_mb: 256
+  timeout_s: 60
+  provenance: oss-fuzz
+
+capability_set: [crash, class]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2025-12-15
