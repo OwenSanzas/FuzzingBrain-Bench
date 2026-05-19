@@ -4,7 +4,7 @@
 on real open-source libraries.**
 
 FuzzingBrain Bench instantiates a 4-tier capability ladder — `reach`,
-`crash`, `class`, `site` — on **26 real zero-day bugs** across C / C++
+`crash`, `class`, `site` — on **30 real zero-day bugs** across C / C++
 and Java libraries (ICU, OpenSSL, libfdt, libldap, Apache Avro,
 ImageMagick, net-snmp, jq, simdutf, mongoose, ots,
 libiberty/rust-demangle, Ghidra's vendored libiberty, UPX, FreeRDP NTLM,
@@ -24,8 +24,8 @@ deterministic oracle with no LLM-as-judge.
 
 | | |
 |---|---|
-| Bugs end-to-end gradeable | **26** |
-| Deferred (build-infra blockers) | 13 |
+| Bugs end-to-end gradeable | **30** |
+| Deferred (build-infra blockers) | 9 |
 | Languages | C, C++, Java |
 | Sanitizer classes covered | null-deref, heap-buffer-overflow, stack-buffer-overflow, oob-read, oob-write, memory-leak, oom, class-cast, uncaught-exception, misaligned-access |
 | Build systems | autoconf, cmake, openssl `Configure`, meson, maven, handrolled, amalgam |
