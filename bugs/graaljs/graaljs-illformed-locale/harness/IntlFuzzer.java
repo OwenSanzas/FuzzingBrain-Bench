@@ -1,29 +1,24 @@
-// IntlFuzzer.java
-import com.code_intelligence.jazzer.api.FuzzedDataProvider;
+// Adapted from upstream issue #985 - driven by a raw byte[] so PocRunner
+// can invoke it directly without Jazzer.
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
+import java.nio.charset.StandardCharsets;
 
 public class IntlFuzzer {
-    private static Context context;
+    private static final Context context = Context.newBuilder("js")
+        .allowAllAccess(false)
+        .option("engine.WarnInterpreterOnly", "false")
+        .build();
 
-    static {
-        context = Context.newBuilder("js")
-            .allowAllAccess(false)
-            .option("engine.WarnInterpreterOnly", "false")
-            .build();
-    }
-
-    public static void fuzzerTestOneInput(FuzzedDataProvider data) {
-        String locale = data.consumeRemainingAsString();
+    public static void fuzzerTestOneInput(byte[] data) {
+        String locale = new String(data, StandardCharsets.UTF_8);
         if (locale.isEmpty()) return;
-
-        String jsCode = String.format("new Intl.Locale('%s');", escapeForJS(locale));
-
+        String jsCode = "new Intl.Locale('" + escapeForJS(locale) + "');";
         try {
             context.eval("js", jsCode);
         } catch (PolyglotException e) {
             if (e.isInternalError()) {
-                // BUG: User input should not cause internal error!
+                // BUG: user input must not surface as an "internal error".
                 throw new RuntimeException("Internal error from user input", e);
             }
         }

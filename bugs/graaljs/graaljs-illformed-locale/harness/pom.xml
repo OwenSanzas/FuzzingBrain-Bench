@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>fbbench</groupId>
+    <artifactId>graaljs-intl-fuzzer</artifactId>
+    <version>1.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!--
+            graaljs 24.1.x covers oracle/graaljs commit c40b7076 (the vuln_commit
+            for issue #985); the fix landed in 24.2 / js/3678. We pull the
+            community polyglot bundle, which transitively brings in
+            org.graalvm.js:js-community + truffle + the sdk.
+        -->
+        <graaljs.version>24.1.1</graaljs.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>polyglot</artifactId>
+            <version>${graaljs.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>js-community</artifactId>
+            <version>${graaljs.version}</version>
+            <type>pom</type>
+        </dependency>
+    </dependencies>
+</project>
