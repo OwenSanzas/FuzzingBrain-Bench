@@ -1,0 +1,18 @@
+NULL Pointer Dereference Parsing MSL <comment>
+================================================
+
+Project:     ImageMagick (Magick++ + MagickCore + coders/msl.c)
+Bug class:   null-deref
+Sanitizer:   AddressSanitizer
+
+The MSL ("Magick Scripting Language") parser does not validate that
+a `<comment>` element body is non-empty before dereferencing it. A
+crafted MSL document with an empty / NULL comment body crashes
+ImageMagick during `image.read(blob)`.
+
+The harness drives `Magick::Image::read(blob)` with `magick("MSL")`
+and `fileName("MSL:")` — the standard OSS-Fuzz MSL harness pattern.
+
+References
+----------
+- Advisory: https://github.com/ImageMagick/ImageMagick/security/advisories/GHSA-5vx3-wx4q-6cj8

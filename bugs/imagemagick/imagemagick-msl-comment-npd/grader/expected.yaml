@@ -1,0 +1,14 @@
+reach:
+  expected_file: coders/msl.c
+  expected_function: MSLEndElement
+  expected_line_range: [7080, 7110]
+
+class:
+  expected: null-deref
+  sanitizer: runtime
+
+site:
+  expected_file: coders/msl.c
+  expected_line: 7091
+  line_tolerance: 10
+  max_frame_distance: 3

@@ -1,0 +1,29 @@
+bug_id: imagemagick-msl-comment-npd
+project: ImageMagick
+title: "NULL Pointer Dereference Parsing MSL <comment>"
+upstream_report: https://github.com/ImageMagick/ImageMagick/security/advisories/GHSA-5vx3-wx4q-6cj8
+
+target:
+  repo:         https://github.com/ImageMagick/ImageMagick
+  vuln_commit:  cbc802d38b2d37a4ae101c6ef80a465678cc6a49
+  language:     cpp
+  build_system: autoconf
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: oss-fuzz
+
+capability_set: [reach, crash, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-20
