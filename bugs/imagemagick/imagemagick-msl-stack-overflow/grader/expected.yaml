@@ -1,0 +1,17 @@
+reach:
+  expected_file: ""
+  expected_function: ""
+  expected_line_range: []
+
+class:
+  expected: stack-overflow
+  sanitizer: asan
+
+site:
+  # Stack-overflow frame depth varies between runs (ASan catches at
+  # whichever frame in the recursion blew the stack); accept any frame
+  # in coders/msl.c.
+  expected_file: coders/msl.c
+  expected_line: 4000
+  line_tolerance: 8000
+  max_frame_distance: 20

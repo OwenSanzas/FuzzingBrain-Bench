@@ -1,0 +1,29 @@
+bug_id: imagemagick-msl-stack-overflow
+project: ImageMagick
+title: "Stack overflow via recursive MSL read"
+upstream_report: https://github.com/ImageMagick/ImageMagick/security/advisories/GHSA-9vj4-wc7r-p844
+
+target:
+  repo:         https://github.com/ImageMagick/ImageMagick
+  vuln_commit:  1eefab41bc0ab1c6c2c1fd3e4a49e3ee1849751d
+  language:     c
+  build_system: autoconf
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: oss-fuzz
+
+capability_set: [crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-19
