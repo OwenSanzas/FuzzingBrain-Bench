@@ -543,7 +543,7 @@
         "found_url": "https://github.com/ImageMagick/ImageMagick/security/advisories/GHSA-5vx3-wx4q-6cj8",
         "notes": "MSL libFuzzer harness in 'Fuzzer' section of advisory body; depends on utils.cc (ImageMagick fuzz helper) which is not pasted"
       },
-      "phase2_status": "deferred"
+      "phase2_status": "shipped"
     },
     {
       "id": "imagemagick-msl-stack-overflow",
@@ -949,7 +949,7 @@
         "found_url": "https://github.com/openssl/openssl/issues/30284",
         "notes": "Two C PoC drivers pasted (Methods 2 standalone + EVP API). The fixed fuzz/provider.c discovery harness (referred to as 'provider_fixed.c') is described by diff intent but not pasted verbatim. Needs follow-up for the actual harness source."
       },
-      "phase2_status": "deferred"
+      "phase2_status": "shipped"
     },
     {
       "id": "ots-processgeneric-npd",
@@ -1233,8 +1233,8 @@
     }
   ],
   "phase2_summary": {
-    "shipped": 15,
-    "deferred": 24,
+    "shipped": 17,
+    "deferred": 22,
     "total": 39
   }
 }

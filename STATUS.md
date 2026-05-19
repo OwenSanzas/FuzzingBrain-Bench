@@ -7,7 +7,7 @@ Snapshot of where the v1 benchmark stands.
 | Phase | What | Status |
 |-------|------|--------|
 | 1 | SPEC + bug corpus | done — see [docs/SPEC.md](docs/SPEC.md), [docs/bench-corpus.json](docs/bench-corpus.json) |
-| 2 | Per-bug builds (Dockerfile + binaries + harness + grader) | **15 / 39 shipped**, 24 deferred — see below |
+| 2 | Per-bug builds (Dockerfile + binaries + harness + grader) | **17 / 39 shipped**, 22 deferred — see below |
 | 3 | MCP server (Go, 6 tools) | done — [tools/mcp-server/](tools/mcp-server/) |
 | 3 | Python runner | done — [runner/](runner/) |
 | 4 | Site integration | done — [docs/benchmark.html](docs/benchmark.html) |
@@ -32,12 +32,14 @@ Dockerfile, 4 prebuilt binaries, poc/poc.bin):
 13. `binutils-rust-demangle-oom` — UBSan null ptr arithmetic in libiberty rust-demangle
 14. `ghidra-rust-demangle-oom` — sibling bug in Ghidra's bundled libiberty (curl-build trick)
 15. `ghidra-cplus-demangle-oom` — OOM via unbounded recursion in same libiberty (libFuzzer timeout)
+16. `openssl-des-ofb-cfb-overread` — OOB read in DES_ede3_ofb64_encrypt (UBSan array-bounds)
+17. `imagemagick-msl-comment-npd` — assert abort in MSL <comment/> via DeleteImageProperty(NULL)
 
-All fifteen grade cleanly against the MCP server (3-round unanimity).
+All seventeen grade cleanly against the MCP server (3-round unanimity).
 
 ## Phase 2 — deferred bugs
 
-The remaining 24 v1 bugs are listed with `phase2_status: deferred` in
+The remaining 22 v1 bugs are listed with `phase2_status: deferred` in
 [docs/bench-corpus.json](docs/bench-corpus.json). They cluster into:
 
 - **Java targets** (graaljs, json-java, pdfbox, ghidra) — need a Jazzer
