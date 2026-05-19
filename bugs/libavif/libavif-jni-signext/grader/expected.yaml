@@ -1,0 +1,18 @@
+reach:
+  expected_file: ""
+  expected_function: ""
+  expected_line_range: []
+
+class:
+  # ASan reports the read past the end of our small buffer as SEGV on
+  # unknown address (the bug's claimed size SIZE_MAX walks off into
+  # unmapped pages). Under fork+corpus it surfaces as
+  # heap-buffer-overflow; both are valid presentations.
+  expected: heap-buffer-overflow
+  sanitizer: asan
+
+site:
+  expected_file: src/stream.c
+  expected_line: 128
+  line_tolerance: 200
+  max_frame_distance: 5

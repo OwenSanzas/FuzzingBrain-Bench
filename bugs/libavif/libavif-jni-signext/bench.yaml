@@ -1,0 +1,29 @@
+bug_id: libavif-jni-signext
+project: libavif
+title: "Heap Buffer Overflow in libavif Android JNI via Signed-Int Length Sign-Extension"
+upstream_report: https://github.com/AOMediaCodec/libavif/issues/3177
+
+target:
+  repo:         https://github.com/AOMediaCodec/libavif
+  vuln_commit:  b357f083ea5ae0ee7b09a65a48621f345e710588
+  language:     c++
+  build_system: cmake
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-04-18
