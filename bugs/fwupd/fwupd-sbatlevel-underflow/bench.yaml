@@ -1,0 +1,29 @@
+bug_id: fwupd-sbatlevel-underflow
+project: fwupd
+title: "Integer underflow in fu_sbatlevel_section_add_entry"
+upstream_report: https://github.com/fwupd/fwupd/issues/9659
+
+target:
+  repo:         https://github.com/fwupd/fwupd
+  vuln_commit:  82a0998339c43fd36855492d9c5d68a20102c338
+  language:     c
+  build_system: meson
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["-rss_limit_mb=512", "@@"]
+  rss_limit_mb: 512
+  timeout_s: 30
+  provenance: oss-fuzz
+
+capability_set: [crash, class]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2025-12-10
