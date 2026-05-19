@@ -15,3 +15,6 @@ report_poc.md
 papers/
 references/
 bin/
+
+.venv/
+runs/

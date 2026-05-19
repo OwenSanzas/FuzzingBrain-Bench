@@ -1,0 +1,21 @@
+# Don't ship per-bug build infra into the runner image — only the
+# already-built harness binaries + poc + bench.yaml + grader matter.
+# (build.sh + harness sources + Dockerfile are reproducibility-only.)
+bugs/*/*/harness/build.sh
+bugs/*/*/harness/*.c
+bugs/*/*/harness/*.cc
+bugs/*/*/harness/*.cpp
+bugs/*/*/harness/*.h
+bugs/*/*/Dockerfile
+
+# Repo-local clutter
+.git
+.venv
+.claude
+runs
+papers
+*.pdf
+背景.md
+report_poc.md
+STATUS.md
+exploitbench.pdf
