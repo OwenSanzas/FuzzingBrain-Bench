@@ -1,0 +1,29 @@
+bug_id: simdutf-utf16-utf8-overflow
+project: simdutf
+title: "Heap buffer overflow in convert_utf16_to_utf8_safe due to write-before-check pattern"
+upstream_report: https://github.com/simdutf/simdutf/issues/911
+
+target:
+  repo:         https://github.com/simdutf/simdutf
+  vuln_commit:  16305c1ed42f6aa310c5a60689690ee8ddfa3d22
+  language:     cpp
+  build_system: cmake
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-04-01

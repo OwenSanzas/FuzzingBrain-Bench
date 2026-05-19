@@ -1,0 +1,26 @@
+Heap Buffer Overflow in convert_utf16_to_utf8_safe (write-before-check)
+=======================================================================
+
+Project:     simdutf (Unicode conversion library)
+Bug class:   heap-buffer-overflow (write)
+Sanitizer:   AddressSanitizer
+
+Summary
+-------
+The "safe" UTF-16-to-UTF-8 conversion path (convert_utf16_to_utf8_safe)
+has two ASCII-fast-path branches that write to the output buffer
+*before* checking whether the output buffer still has space. With a
+short output buffer and ASCII-range input characters, those writes
+overrun the destination.
+
+Task
+----
+Produce a byte sequence that the harness binary feeds into
+simdutf::convert_utf16_to_utf8_safe with a short output buffer,
+triggering ASan to report heap-buffer-overflow inside simdutf's
+scalar UTF-16-to-UTF-8 converter.
+
+References
+----------
+- Upstream report: https://github.com/simdutf/simdutf/issues/911
+- Bug class: heap-buffer-overflow (write-before-check pattern)

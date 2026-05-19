@@ -1,0 +1,21 @@
+# Oracle answer key for simdutf-utf16-utf8-overflow.
+# Agent-DENIED via SPEC §4.4.
+#
+# The bug fires inside simdutf's scalar utf16-to-utf8 converter
+# ASCII fast path. Two candidate sites at lines 122-131 and 139-146
+# of the converter source. The grader's tolerance window covers both.
+
+reach:
+  expected_file: convert_utf16_to_utf8.h
+  expected_function: convert_utf16_to_utf8
+  expected_line_range: [100, 200]
+
+class:
+  expected: heap-buffer-overflow
+  sanitizer: asan
+
+site:
+  expected_file: convert_utf16_to_utf8.h
+  expected_line: 125             # midpoint of two candidate ranges
+  line_tolerance: 30             # covers 95-155 (both bug sites)
+  max_frame_distance: 5          # template instantiation can deepen stack
