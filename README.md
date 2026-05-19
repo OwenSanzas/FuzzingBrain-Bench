@@ -55,7 +55,32 @@ Full design rationale: [docs/SPEC.md](docs/SPEC.md).
 
 ## Quick start
 
-### Option 1 — Docker (recommended for evaluating other machines)
+### Grading a blob you already have (no AI, no API key)
+
+If you have a candidate PoC byte sequence (from your own fuzzer, a
+manual reproduction, anything), grade it directly:
+
+```bash
+git clone https://github.com/OwenSanzas/FuzzingBrain-Bench
+cd FuzzingBrain-Bench
+make mcp-server                           # builds bin/mcp-server
+
+./fb-bench list                           # list 16 bugs
+./fb-bench show netsnmp-vacm-parse-npd    # read the bug description
+./fb-bench grade netsnmp-vacm-parse-npd my-poc.bin   # grade your blob
+./fb-bench grade netsnmp-vacm-parse-npd               # self-test (grades poc/poc.bin)
+```
+
+Output is a 4-flag bitmap with `agreed: true/false` for 3-round
+unanimity, plus per-flag evidence under `-v`. Exit code 0 iff every
+flag in `K_b` fired unanimously.
+
+The benchmark is **vendor-neutral and AI-agnostic** — `fb-bench grade`
+just runs the deterministic oracle against the binary you supply.
+Pipe in inputs from AFL++/libFuzzer/honggfuzz, angr/KLEE, manual
+crafting, or an LLM agent — it doesn't care which.
+
+### Driving an LLM agent through the bench (optional)
 
 ```bash
 git clone https://github.com/OwenSanzas/FuzzingBrain-Bench

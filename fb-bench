@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""FB-Bench — grade a blob against a FuzzingBrain Bench bug.
+
+Usage:
+    fb-bench list
+        List all bugs available for grading.
+
+    fb-bench show <bug_id>
+        Print the bug's description + capability_set.
+
+    fb-bench grade <bug_id> [<blob>] [--rounds N]
+        Grade <blob> against <bug_id>. If <blob> is omitted, grade the
+        bug's own poc/poc.bin as a self-test. Default rounds = 3.
+
+Exit code: 0 if all flags in capability_set fired unanimously; 1 otherwise.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+SERVER = REPO / "bin" / "mcp-server"
+
+# Tiny YAML reader so this CLI has zero pip dependencies. Handles only
+# the flat key: value / key: [list] forms used in bench.yaml.
+def _read_bench(path: Path) -> dict:
+    out: dict = {}
+    text = path.read_text()
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].rstrip()
+        if not line or ":" not in line or line[0] in " \t-":
+            continue
+        k, _, v = line.partition(":")
+        v = v.strip()
+        if v.startswith("[") and v.endswith("]"):
+            out[k.strip()] = [s.strip().strip('"\'') for s in v[1:-1].split(",") if s.strip()]
+        else:
+            out[k.strip()] = v.strip('"\'')
+    return out
+
+
+def find_bug(bug_id: str) -> Path:
+    for proj in (REPO / "bugs").iterdir():
+        if not proj.is_dir():
+            continue
+        cand = proj / bug_id
+        if cand.is_dir():
+            return cand
+    sys.exit(f"error: bug {bug_id!r} not found under {REPO/'bugs'}")
+
+
+def list_bugs() -> list[tuple[str, Path]]:
+    bugs = []
+    for proj in sorted((REPO / "bugs").iterdir()):
+        if not proj.is_dir():
+            continue
+        for sub in sorted(proj.iterdir()):
+            if (sub / "bench.yaml").is_file() and (sub / "binaries").is_dir():
+                bugs.append((sub.name, sub))
+    return bugs
+
+
+def cmd_list(_args) -> int:
+    bugs = list_bugs()
+    print(f"{len(bugs)} bugs available:\n")
+    for bug_id, bd in bugs:
+        try:
+            bench = _read_bench(bd / "bench.yaml")
+            title = bench.get("title", "")
+            K_b = bench.get("capability_set", [])
+        except Exception:
+            title, K_b = "", []
+        flags = ",".join(K_b) if K_b else "?"
+        print(f"  {bug_id:38s} K_b=[{flags}]  {title}")
+    return 0
+
+
+def cmd_show(args) -> int:
+    bd = find_bug(args.bug_id)
+    bench = _read_bench(bd / "bench.yaml")
+    print(f"# {bench.get('title', args.bug_id)}\n")
+    print(f"bug_id:           {bench.get('bug_id')}")
+    print(f"project:          {bench.get('project')}")
+    print(f"upstream_report:  {bench.get('upstream_report')}")
+    print(f"vuln_commit:      {bench.get('vuln_commit', '(see bench.yaml target)')}")
+    print(f"capability_set:   {bench.get('capability_set')}")
+    print()
+    desc_path = bd / "description.txt"
+    if desc_path.exists():
+        print(desc_path.read_text())
+    return 0
+
+
+def cmd_grade(args) -> int:
+    if not SERVER.exists():
+        sys.exit(f"error: {SERVER} not built. run `make mcp-server`")
+    bd = find_bug(args.bug_id)
+    blob = Path(args.blob) if args.blob else bd / "poc" / "poc.bin"
+    if not blob.is_file():
+        sys.exit(f"error: blob not found: {blob}")
+
+    bench = _read_bench(bd / "bench.yaml")
+    K_b = bench.get("capability_set") or ["reach", "crash", "class", "site"]
+
+    ws = Path(tempfile.mkdtemp(prefix=f"fb-{args.bug_id}-"))
+    try:
+        shutil.copy(blob, ws / "input.bin")
+        req = {
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "grade", "arguments": {
+                "path": str(ws / "input.bin"),
+                "options": {"round_count": args.rounds},
+            }},
+        }
+        env = os.environ.copy()
+        env["BENCH_BUG_DIR"] = str(bd.resolve())
+        env["BENCH_WORKSPACE"] = str(ws)
+        t0 = time.time()
+        p = subprocess.run(
+            [str(SERVER)],
+            input=(json.dumps(req) + "\n").encode(),
+            capture_output=True, env=env, timeout=300,
+        )
+        elapsed = time.time() - t0
+        out = json.loads(p.stdout.decode().strip().splitlines()[-1])
+        r = out["result"]["structuredContent"]
+        caps = r["capabilities"]
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+    print(f"\n  grading {args.bug_id}")
+    print(f"  blob:   {blob}  ({blob.stat().st_size} bytes)")
+    print(f"  K_b:    {K_b}\n")
+
+    icons = {"fired": "✓", "not_fired": "✗", "n/a": "-"}
+    for flag in ["reach", "crash", "class", "site"]:
+        status = caps.get(flag, "n/a")
+        in_kb = " " if flag in K_b else " (N/A)"
+        print(f"    {icons.get(status,'?')}  {flag:6s}  {status}{in_kb}")
+
+    print(f"\n  agreed:    {r.get('agreed', False)}")
+    print(f"  duration:  {elapsed:.1f}s  ({r.get('duration_ms', 0)}ms over {args.rounds} rounds)\n")
+
+    if args.verbose:
+        print("  evidence:")
+        for k, v in (r.get("evidence") or {}).items():
+            if v:
+                print(f"    {k}: {json.dumps(v)}")
+        print()
+
+    kb_ok = all(caps.get(c) == "fired" for c in K_b) and r.get("agreed", False)
+    return 0 if kb_ok else 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="fb-bench",
+                                  description="FuzzingBrain Bench CLI — grade blobs against real-bug oracles.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="list all bugs available for grading"
+                   ).set_defaults(fn=cmd_list)
+
+    sp_show = sub.add_parser("show", help="show a bug's description")
+    sp_show.add_argument("bug_id")
+    sp_show.set_defaults(fn=cmd_show)
+
+    sp_grade = sub.add_parser("grade", help="grade a blob against a bug's oracle")
+    sp_grade.add_argument("bug_id")
+    sp_grade.add_argument("blob", nargs="?",
+                          help="path to blob to grade (default: bug's own poc/poc.bin)")
+    sp_grade.add_argument("--rounds", type=int, default=3,
+                          help="randomization rounds for unanimity check (default 3)")
+    sp_grade.add_argument("-v", "--verbose", action="store_true",
+                          help="print oracle evidence")
+    sp_grade.set_defaults(fn=cmd_grade)
+
+    args = ap.parse_args()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
