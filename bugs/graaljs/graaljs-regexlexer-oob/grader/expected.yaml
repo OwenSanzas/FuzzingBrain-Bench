@@ -1,0 +1,14 @@
+reach:
+  expected_file: ""
+  expected_function: ""
+  expected_line_range: []
+
+class:
+  expected: uncaught-exception
+  sanitizer: jvm
+
+site:
+  expected_file: ""
+  expected_line: 0
+  line_tolerance: 0
+  max_frame_distance: 0

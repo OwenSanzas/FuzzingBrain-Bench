@@ -1,0 +1,29 @@
+bug_id: graaljs-regexlexer-oob
+project: graaljs
+title: "StringIndexOutOfBoundsException in RegexLexer.consumeChar causes Internal Error"
+upstream_report: https://github.com/oracle/graaljs/issues/986
+
+target:
+  repo:         https://github.com/oracle/graaljs
+  vuln_commit:  24.1.2
+  language:     java
+  build_system: maven
+
+harness:
+  type: java
+  entrypoint: RegExpFuzzer.fuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 1024
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [crash, class]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-13

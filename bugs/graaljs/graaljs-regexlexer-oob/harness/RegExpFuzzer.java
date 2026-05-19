@@ -1,30 +1,30 @@
-import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
+import java.nio.charset.StandardCharsets;
 
 public class RegExpFuzzer {
-    private static Context context;
+    private static final Context context = Context.newBuilder("js")
+        .allowAllAccess(false)
+        .option("engine.WarnInterpreterOnly", "false")
+        .build();
 
-    static {
-        context = Context.newBuilder("js")
-            .allowAllAccess(false)
-            .option("engine.WarnInterpreterOnly", "false")
-            .build();
-    }
-
-    public static void fuzzerTestOneInput(FuzzedDataProvider data) {
-        String pattern = data.consumeString(200);
-        boolean useVFlag = data.consumeBoolean();
-        if (pattern.isEmpty()) return;
-
-        String flags = useVFlag ? "v" : "";
-        String jsCode = String.format("try { new RegExp('%s', '%s'); } catch(e) {}",
-                                      escapeForJS(pattern), flags);
-        try {
-            context.eval("js", jsCode);
-        } catch (PolyglotException e) {
-            if (e.isInternalError()) {
-                throw new RuntimeException("Internal error from user input", e);
+    public static void fuzzerTestOneInput(byte[] data) {
+        String pattern = new String(data, StandardCharsets.UTF_8);
+        if (pattern.isEmpty() || pattern.length() > 200) return;
+        String esc = escapeForJS(pattern);
+        // Try both unicode flags - the v-flag exercises the RegexLexer path.
+        String[] codes = {
+            "try { new RegExp('" + esc + "', 'v'); } catch(e) {}",
+            "try { new RegExp('" + esc + "', 'u'); } catch(e) {}",
+            "try { new RegExp('" + esc + "'); } catch(e) {}",
+        };
+        for (String code : codes) {
+            try {
+                context.eval("js", code);
+            } catch (PolyglotException e) {
+                if (e.isInternalError()) {
+                    throw new RuntimeException("Internal error from user regex: " + code, e);
+                }
             }
         }
     }
