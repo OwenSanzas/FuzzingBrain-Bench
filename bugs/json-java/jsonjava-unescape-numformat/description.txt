@@ -1,0 +1,24 @@
+NumberFormatException in XMLTokener.unescapeEntity (JSON-java)
+==============================================================
+
+Project:     stleary/JSON-java
+Bug class:   uncaught-exception (Java)
+Sanitizer:   JVM (no native sanitizer; bug surfaces as an unhandled exception)
+
+`XMLTokener.unescapeEntity()` parses XML numeric character references of
+the form `&#NNNN;`. When the digits between `&#` and `;` form an integer
+literal that exceeds Java's int range, `Integer.parseInt()` throws
+`NumberFormatException`, which is not caught by the harness wrapper and
+propagates to crash the JVM.
+
+The XmlToJsonFuzzer (provided in the upstream report) calls
+`XML.toJSONObject(input)`; it catches `JSONException` but not
+`NumberFormatException`, so the latter is observed at the fuzzer
+boundary.
+
+References
+----------
+- Upstream issue: https://github.com/stleary/JSON-java/issues/1036
+- Fix PR:         https://github.com/stleary/JSON-java/pull/1038
+- Sister bug:     jsonjava-unescape-strindex (same harness, same function,
+                  different exception type)

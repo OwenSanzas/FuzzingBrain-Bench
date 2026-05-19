@@ -1,0 +1,9 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+LIB="${DIR}/../lib"
+RUNDIR="$(pwd)"
+exec java -Xmx512m \
+    -javaagent:"${LIB}/jacocoagent.jar"=destfile="${RUNDIR}/jacoco.exec" \
+    -cp "${LIB}/classes:${LIB}/json-java.jar" \
+    -DtargetClass=XmlToJsonFuzzer \
+    PocRunner "$@"

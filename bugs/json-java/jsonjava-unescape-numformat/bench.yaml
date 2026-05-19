@@ -1,0 +1,29 @@
+bug_id: jsonjava-unescape-numformat
+project: json-java
+title: "NumberFormatException in XMLTokener.unescapeEntity due to missing input validation"
+upstream_report: https://github.com/stleary/JSON-java/issues/1036
+
+target:
+  repo:         https://github.com/stleary/JSON-java
+  vuln_commit:  e635f4023811c80c02b38428ec58e42b397f820f
+  language:     java
+  build_system: maven
+
+harness:
+  type: java
+  entrypoint: XmlToJsonFuzzer.fuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 1024
+  timeout_s: 30
+  provenance: oss-fuzz
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-01-29

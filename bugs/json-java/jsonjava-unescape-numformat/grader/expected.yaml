@@ -1,0 +1,14 @@
+reach:
+  expected_file: src/main/java/org/json/XMLTokener.java
+  expected_function: unescapeEntity
+  expected_line_range: [140, 220]
+
+class:
+  expected: uncaught-exception
+  sanitizer: jvm
+
+site:
+  expected_file: XMLTokener.java
+  expected_line: 169
+  line_tolerance: 40
+  max_frame_distance: 5

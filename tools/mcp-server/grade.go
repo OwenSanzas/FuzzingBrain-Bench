@@ -233,8 +233,17 @@ func runHarness(bin string, invocation []string, pocPath, runDir string, timeout
 		"LSAN_OPTIONS=exitcode=66",
 		"TMPDIR="+runDir,
 	)
-	var sout, serr bytes.Buffer
-	cmd.Stdout = &sout
+	// stdout: cap at 256 KiB and silently drop the rest. No oracle reads
+	// stdout (only stderr), and some harnesses (e.g. jq with a 5000-arg
+	// program) print millions of disassembly lines that otherwise pin the
+	// grader on bytes.Buffer growth. Capping shrinks jq from ~85s to ~10s
+	// per round without affecting any flag result.
+	//
+	// stderr is left unbounded — sanitizer reports land at the END of
+	// stderr, so truncating risks losing the crash signal.
+	sout := &cappedWriter{max: 256 * 1024}
+	var serr bytes.Buffer
+	cmd.Stdout = sout
 	cmd.Stderr = &serr
 
 	done := make(chan error, 1)
@@ -263,6 +272,25 @@ func runHarness(bin string, invocation []string, pocPath, runDir string, timeout
 		return harnessRun{stdout: sout.String(), stderr: serr.String(), exitCode: 124, timedOut: true}
 	}
 }
+
+type cappedWriter struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	remain := c.max - c.buf.Len()
+	if remain <= 0 {
+		return len(p), nil
+	}
+	if len(p) <= remain {
+		return c.buf.Write(p)
+	}
+	c.buf.Write(p[:remain])
+	return len(p), nil
+}
+
+func (c *cappedWriter) String() string { return c.buf.String() }
 
 func signalName(ee *exec.ExitError) string {
 	// Cross-platform-ish: rely on string repr.
@@ -295,6 +323,10 @@ func crashFired(r harnessRun) bool {
 	if strings.Contains(r.stderr, "libFuzzer: timeout") || strings.Contains(r.stderr, "libFuzzer: out-of-memory") {
 		return true
 	}
+	// Java: any uncaught exception that reaches the JVM trailer counts as a crash.
+	if javaExceptionLine.MatchString(r.stderr) {
+		return true
+	}
 	return false
 }
 
@@ -304,6 +336,17 @@ var sanitizerSummary = regexp.MustCompile(`SUMMARY:\s+(Address|UndefinedBehavior
 var asanErrorLine = regexp.MustCompile(`AddressSanitizer:\s+([a-zA-Z0-9_-]+)`)
 var ubsanErrorLine = regexp.MustCompile(`runtime error:\s+([^\n]+)`)
 var lsanLeakLine = regexp.MustCompile(`(Direct|Indirect) leak of`)
+
+// Java exception detection — for Jazzer-style harnesses and any Java bug
+// where fuzzerTestOneInput(byte[]) is invoked from a wrapper main().
+//
+//  Caused by: java.lang.NumberFormatException: For input string: ...
+//  Exception in thread "main" java.lang.StringIndexOutOfBoundsException: ...
+//  == Java Exception: java.lang.ClassCastException: ...        (Jazzer trailer)
+var javaExceptionLine = regexp.MustCompile(`(?:Caused by:|Exception in thread "[^"]*"|== Java Exception:)\s+([a-zA-Z0-9_.$]+(?:Exception|Error))`)
+
+// "at pkg.Class.method(File.java:123)" — Java stack frame.
+var javaFrameRe = regexp.MustCompile(`\s+at\s+[a-zA-Z0-9_.$]+\(([A-Za-z0-9_$]+\.java):(\d+)\)`)
 
 func classMatches(r harnessRun, expected string) bool {
 	if expected == "" {
@@ -334,7 +377,44 @@ func classMatches(r harnessRun, expected string) bool {
 			return true
 		}
 	}
+	if m := javaExceptionLine.FindStringSubmatch(r.stderr); m != nil {
+		mapped := mapJavaException(m[1])
+		if mapped == expected || m[1] == expected {
+			return true
+		}
+	}
 	return false
+}
+
+// mapJavaException converts a fully-qualified Java exception class name into
+// the bench's expected_class vocabulary. The expected_class for Java bugs
+// typically matches one of {uncaught-exception, oom, null-deref, oob-read,
+// class-cast, integer-overflow}.
+func mapJavaException(fqn string) string {
+	low := strings.ToLower(fqn)
+	switch {
+	case strings.HasSuffix(low, "outofmemoryerror"):
+		return "oom"
+	case strings.HasSuffix(low, "stackoverflowerror"):
+		return "stack-overflow"
+	case strings.HasSuffix(low, "nullpointerexception"):
+		return "null-deref"
+	case strings.Contains(low, "indexoutofbounds"):
+		return "oob-read"
+	case strings.Contains(low, "arrayindexoutofbounds"):
+		return "oob-read"
+	case strings.HasSuffix(low, "classcastexception"):
+		return "class-cast"
+	case strings.HasSuffix(low, "numberformatexception"):
+		return "uncaught-exception"
+	case strings.HasSuffix(low, "negativearraysizeexception"):
+		return "uncaught-exception"
+	case strings.HasSuffix(low, "arithmeticexception"):
+		return "integer-overflow"
+	case strings.Contains(low, "exception"), strings.Contains(low, "error"):
+		return "uncaught-exception"
+	}
+	return ""
 }
 
 func canonClass(s string) string {
@@ -387,7 +467,7 @@ func siteMatches(r harnessRun, expected *expectedYAML) bool {
 		maxFrame = 3
 	}
 
-	// Walk frames in order, skipping harness frames.
+	// Walk native frames in order, skipping harness frames.
 	distance := 0
 	for _, m := range frameRe.FindAllStringSubmatch(r.stderr, -1) {
 		file := m[2]
@@ -409,7 +489,42 @@ func siteMatches(r harnessRun, expected *expectedYAML) bool {
 			return true
 		}
 	}
+	// Java frames: walk Java stack frames in stderr.
+	jDist := 0
+	for _, m := range javaFrameRe.FindAllStringSubmatch(r.stderr, -1) {
+		file := m[1]
+		if isJavaHarnessFrame(file) {
+			continue
+		}
+		jDist++
+		if jDist > maxFrame {
+			break
+		}
+		if !javaSuffixMatch(file, expected.Site.ExpectedFile) {
+			continue
+		}
+		line, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		if abs(line-expected.Site.ExpectedLine) <= tol {
+			return true
+		}
+	}
 	return false
+}
+
+func isJavaHarnessFrame(file string) bool {
+	return strings.Contains(file, "Fuzzer.java") || strings.Contains(file, "PocRunner.java")
+}
+
+// javaSuffixMatch — Java stack frames contain just the .java file name (no path).
+// expected_file may be "XmlToJsonFuzzer.java" or "src/main/java/.../XMLTokener.java".
+func javaSuffixMatch(framePath, expected string) bool {
+	if framePath == expected {
+		return true
+	}
+	return filepath.Base(expected) == framePath
 }
 
 func isHarnessFrame(file string) bool {
@@ -460,6 +575,11 @@ func buildEvidence(last roundOutcome, expected *expectedYAML) map[string]any {
 			detected = canonClass(m[1])
 		} else if m := ubsanErrorLine.FindStringSubmatch(r.stderr); m != nil {
 			detected = mapUBSan(m[1])
+		} else if m := javaExceptionLine.FindStringSubmatch(r.stderr); m != nil {
+			detected = mapJavaException(m[1])
+			if detected == "" {
+				detected = m[1]
+			}
 		}
 		ev["class"] = map[string]any{"sanitizer": expected.Class.Sanitizer, "detected_class": detected}
 	}
