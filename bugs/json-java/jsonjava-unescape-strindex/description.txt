@@ -1,0 +1,21 @@
+StringIndexOutOfBoundsException in XMLTokener.unescapeEntity (JSON-java)
+==========================================================================
+
+Project:     stleary/JSON-java
+Bug class:   uncaught-exception (Java)
+Sanitizer:   JVM (no native sanitizer; bug surfaces as an unhandled exception)
+
+`XMLTokener.unescapeEntity()` is missing a length check when extracting
+the numeric portion of an XML character reference `&#NNNN;`. Inputs
+where the entity body is empty or shorter than the parser expects cause
+`String.substring` / `String.charAt` to throw
+`StringIndexOutOfBoundsException`, which is not caught by the harness
+wrapper and propagates to crash the JVM.
+
+This is a sister bug to jsonjava-unescape-numformat (same function,
+different malformed-input shape, different exception class).
+
+References
+----------
+- Upstream issue: https://github.com/stleary/JSON-java/issues/1035
+- Fix PR:         https://github.com/stleary/JSON-java/pull/1038
