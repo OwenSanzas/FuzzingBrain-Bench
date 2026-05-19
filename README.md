@@ -63,12 +63,22 @@ manual reproduction, anything), grade it directly:
 ```bash
 git clone https://github.com/OwenSanzas/FuzzingBrain-Bench
 cd FuzzingBrain-Bench
-make mcp-server                           # builds bin/mcp-server
 
-./fb-bench list                           # list 16 bugs
-./fb-bench show netsnmp-vacm-parse-npd    # read the bug description
-./fb-bench grade netsnmp-vacm-parse-npd my-poc.bin   # grade your blob
-./fb-bench grade netsnmp-vacm-parse-npd               # self-test (grades poc/poc.bin)
+# 1. smoke test — grades the bug's reference poc.bin to confirm
+#    grader + harness pipeline works. Should print 4/4 fired.
+./fb-bench grade netsnmp-vacm-parse-npd
+
+# 2. read the bug description
+./fb-bench show netsnmp-vacm-parse-npd
+
+# 3. produce your own candidate blob (your fuzzer / your LLM / by hand)
+echo -n "your guess" > my-try.bin
+
+# 4. grade it
+./fb-bench grade netsnmp-vacm-parse-npd my-try.bin
+
+# misc
+./fb-bench list                           # all 16 bugs + their K_b
 ```
 
 Output is a 4-flag bitmap with `agreed: true/false` for 3-round
