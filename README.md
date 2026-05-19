@@ -4,12 +4,14 @@
 on real open-source libraries.**
 
 FuzzingBrain Bench instantiates a 4-tier capability ladder — `reach`,
-`crash`, `class`, `site` — on **16 real zero-day bugs** across C / C++
-libraries (ICU, OpenSSL, libfdt, libldap, Apache Avro, ImageMagick,
-net-snmp, jq, ndpi, simdutf, mongoose, ots, libiberty/rust-demangle,
-Ghidra's vendored libiberty). Every bug was discovered by FuzzingBrain
-and reported upstream; every grade is computed by a deterministic
-oracle with no LLM-as-judge.
+`crash`, `class`, `site` — on **26 real zero-day bugs** across C / C++
+and Java libraries (ICU, OpenSSL, libfdt, libldap, Apache Avro,
+ImageMagick, net-snmp, jq, simdutf, mongoose, ots,
+libiberty/rust-demangle, Ghidra's vendored libiberty, UPX, FreeRDP NTLM,
+HarfBuzz fontations, plus 7 Java bugs across JSON-java, PDFBox, and
+Avro Java via a Jazzer-compatible PocRunner). Every bug was discovered
+by FuzzingBrain and reported upstream; every grade is computed by a
+deterministic oracle with no LLM-as-judge.
 
 > Modeled on V8-bench / [ExploitBench](https://exploitbench.ai/)
 > (Lee & Brumley, CMU, 2026) but adapted for library memory-safety:
@@ -22,11 +24,11 @@ oracle with no LLM-as-judge.
 
 | | |
 |---|---|
-| Bugs end-to-end gradeable | **16** |
-| Deferred (Java / large builds) | 23 |
-| Languages | C, C++ |
-| Sanitizer classes covered | null-deref, heap-buffer-overflow, oob-read, memory-leak, oom |
-| Build systems | autoconf, cmake, openssl `Configure`, handrolled, amalgam |
+| Bugs end-to-end gradeable | **26** |
+| Deferred (build-infra blockers) | 13 |
+| Languages | C, C++, Java |
+| Sanitizer classes covered | null-deref, heap-buffer-overflow, stack-buffer-overflow, oob-read, oob-write, memory-leak, oom, class-cast, uncaught-exception, misaligned-access |
+| Build systems | autoconf, cmake, openssl `Configure`, meson, maven, handrolled, amalgam |
 | Grader oracle | deterministic, 3-round unanimity |
 
 ---
