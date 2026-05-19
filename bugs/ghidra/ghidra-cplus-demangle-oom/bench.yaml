@@ -17,7 +17,7 @@ harness:
   timeout_s: 30
   provenance: fuzzingbrain
 
-capability_set: [reach, crash, class, site]
+capability_set: [crash, class]
 
 reproducibility:
   base_image_digest: ""

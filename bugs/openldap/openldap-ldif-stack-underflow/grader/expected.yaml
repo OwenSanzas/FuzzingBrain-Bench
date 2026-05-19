@@ -7,8 +7,13 @@ reach:
   expected_line_range: [700, 900]   # ldif_read_record body in libldap/ldif.c
 
 class:
-  expected: stack-buffer-underflow
+  expected: oob-read
   sanitizer: ubsan
+# Real bug class is stack-buffer-underflow (an underflowed index
+# reads below a stack array). UBSan's array-bounds check reports it
+# as "index <SIZE_MAX> out of bounds for type 'char[4096]'" — the
+# grader canonicalizes that to oob-read. ASan would label this
+# stack-buffer-underflow but UBSan's vocabulary is coarser.
 
 site:
   expected_file: ldif.c
