@@ -1,0 +1,29 @@
+bug_id: upx-elf32-pack2-memleak
+project: upx
+title: "Memory Leak in ElfLinker::addLoader() when packing ELF executables"
+upstream_report: https://github.com/upx/upx/issues/945
+
+target:
+  repo:         https://github.com/upx/upx
+  vuln_commit:  v5.0.2
+  language:     c++
+  build_system: cmake
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2025-12-09

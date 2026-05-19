@@ -1,0 +1,14 @@
+reach:
+  expected_file: src/linker.cpp
+  expected_function: addLoader
+  expected_line_range: [350, 400]
+
+class:
+  expected: memory-leak
+  sanitizer: lsan
+
+site:
+  expected_file: src/linker.cpp
+  expected_line: 369
+  line_tolerance: 10
+  max_frame_distance: 5
