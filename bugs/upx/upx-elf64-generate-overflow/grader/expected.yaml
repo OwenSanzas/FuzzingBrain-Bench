@@ -1,0 +1,14 @@
+reach:
+  expected_file: src/p_lx_elf.cpp
+  expected_function: generateElfHdr
+  expected_line_range: [4190, 4280]
+
+class:
+  expected: heap-buffer-overflow
+  sanitizer: asan
+
+site:
+  expected_file: src/p_lx_elf.cpp
+  expected_line: 4261
+  line_tolerance: 80
+  max_frame_distance: 5

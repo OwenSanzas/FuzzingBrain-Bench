@@ -1,0 +1,22 @@
+Heap Buffer Overflow in PackLinuxElf64::generateElfHdr
+=======================================================
+
+Project:     upx/upx (ELF64 packer)
+Bug class:   heap-buffer-overflow (read)
+Sanitizer:   AddressSanitizer
+
+UPX's `PackLinuxElf64::generateElfHdr()` writes `p_filesz` bytes from
+`file_image[p_offset]` without bounds-checking either against the
+buffer allocation. A crafted ELF64 with a `GNU_STACK` program header
+declaring `p_filesz = 0xff00` while the actual file image is only
+~45 KiB causes the write to read past the end of the heap buffer.
+
+The harness writes the fuzz input to a temp file and calls
+`upx_main(7, {"upx","-1","-f","-q",IN,"-o",OUT})`. The crash fires
+during the pack pass.
+
+References
+----------
+- Upstream issue: https://github.com/upx/upx/issues/947
+- Vulnerable code: src/p_lx_elf.cpp:4261 (write past end of file_image)
+- Harness:        FuzzingBrain custom (not in upstream oss-fuzz)

@@ -1,0 +1,29 @@
+bug_id: upx-elf64-generate-overflow
+project: upx
+title: "Heap Buffer Overflow in PackLinuxElf64::generateElfHdr"
+upstream_report: https://github.com/upx/upx/issues/947
+
+target:
+  repo:         https://github.com/upx/upx
+  vuln_commit:  1ebd3356f36780960a03354a8ded23410ebc7e79
+  language:     cpp
+  build_system: cmake
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: null
