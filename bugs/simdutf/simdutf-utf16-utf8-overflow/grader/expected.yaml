@@ -6,8 +6,8 @@
 # of the converter source. The grader's tolerance window covers both.
 
 reach:
-  expected_file: convert_utf16_to_utf8.h
-  expected_function: convert_utf16_to_utf8
+  expected_file: scalar/utf16_to_utf8/utf16_to_utf8.h
+  expected_function: convert_with_errors
   expected_line_range: [100, 200]
 
 class:
@@ -15,7 +15,7 @@ class:
   sanitizer: asan
 
 site:
-  expected_file: convert_utf16_to_utf8.h
+  expected_file: scalar/utf16_to_utf8/utf16_to_utf8.h
   expected_line: 125             # midpoint of two candidate ranges
   line_tolerance: 30             # covers 95-155 (both bug sites)
   max_frame_distance: 5          # template instantiation can deepen stack
