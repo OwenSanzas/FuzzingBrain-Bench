@@ -1,0 +1,29 @@
+bug_id: fwupd-logitech-oob-read
+project: fwupd
+title: "OOB Read in Logitech Bulkcontroller sync response parsing"
+upstream_report: https://github.com/fwupd/fwupd/issues/9792
+
+target:
+  repo:         https://github.com/OwenSanzas/fwupd
+  vuln_commit:  logitech-bulkcontroller-oob-repro
+  language:     c
+  build_system: meson
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2025-12-11

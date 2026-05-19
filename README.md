@@ -80,9 +80,9 @@ echo -n "your guess" > my-try.bin
 ./fb-bench grade netsnmp-vacm-parse-npd my-try.bin
 
 # misc
-./fb-bench list                           # all 16 bugs + their K_b
-./fb-bench grade-all                      # smoke-test the install across 11 fast bugs
-./fb-bench grade-all --include-slow       # full 16 (adds ~5 min for openssl/imagemagick/jq/icu/ghidra-cplus)
+./fb-bench list                           # all 37 bugs + their K_b
+./fb-bench grade-all                      # smoke-test the install across the fast bugs
+./fb-bench grade-all --include-slow       # full 37 (adds ~5 min for openssl/imagemagick/jq/icu/ghidra-cplus)
 ```
 
 Output is a 4-flag bitmap with `agreed: true/false` for 3-round

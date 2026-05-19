@@ -1,0 +1,14 @@
+reach:
+  expected_file: ""
+  expected_function: ""
+  expected_line_range: []
+
+class:
+  expected: heap-buffer-overflow
+  sanitizer: asan
+
+site:
+  expected_file: plugins/logitech-bulkcontroller/fu-logitech-bulkcontroller-device.c
+  expected_line: 244
+  line_tolerance: 30
+  max_frame_distance: 8
