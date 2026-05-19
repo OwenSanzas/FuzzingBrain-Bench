@@ -1,0 +1,29 @@
+bug_id: ndpi-hex-decode-sscanf
+project: ndpi
+title: "nDPI ndpi_hex_decode Unbounded sscanf Over Borrowed Buffer (TLS Block Parser)"
+upstream_report: https://github.com/ntop/nDPI/issues/3159
+
+target:
+  repo:         https://github.com/ntop/nDPI
+  vuln_commit:  68c7159a72dee1c42988eed65c7bfa08c510002e
+  language:     c
+  build_system: autoconf
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-02-19

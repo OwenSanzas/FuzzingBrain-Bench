@@ -1,0 +1,32 @@
+nDPI ndpi_hex_decode Unbounded sscanf Over Borrowed Buffer
+==========================================================
+
+Project:     ndpi (ntop/nDPI — deep packet inspection)
+Bug class:   oob-read (heap)
+Sanitizer:   AddressSanitizer
+
+Summary
+-------
+ndpi_hex_decode() in src/lib/ndpi_utils.c uses per-byte
+`sscanf("%02hhX", ...)` to parse hex characters from a caller-
+supplied byte buffer. The buffer is not required (by the public API)
+to be NUL-terminated. glibc's sscanf internally calls
+`memchr(s, 0, SIZE_MAX)` to compute the string length, walking past
+the end of the caller's buffer. Under ASan the read lands in the
+heap redzone.
+
+Reachable from the public NDPI_EXPORT API `ndpi_decode_tls_blocks`.
+In-tree callers pass NUL-terminated strings; out-of-tree consumers
+that feed raw bytes hit the bug.
+
+Task
+----
+Produce a byte sequence that the harness binary
+(fuzz_ndpi_decode_tls_blocks.c) feeds into ndpi_decode_tls_blocks
+without a trailing NUL, causing ASan to report a heap-buffer-overflow
+read inside ndpi_hex_decode at src/lib/ndpi_utils.c.
+
+References
+----------
+- Upstream report: https://github.com/ntop/nDPI/issues/3159
+- Buggy line: src/lib/ndpi_utils.c:1144 in ndpi_hex_decode
