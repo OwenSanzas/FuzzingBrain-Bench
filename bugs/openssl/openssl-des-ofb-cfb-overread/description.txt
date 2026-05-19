@@ -1,0 +1,21 @@
+Stack Buffer Over-Read in DES OFB/CFB64 via Unchecked num Parameter
+====================================================================
+
+Project:     openssl/openssl (libcrypto)
+Bug class:   stack-buffer-overread
+Sanitizer:   AddressSanitizer
+
+`EVP_CIPHER_CTX_set_params()` accepts the `OSSL_CIPHER_PARAM_NUM`
+parameter without validating it against the cipher's block size. For
+DES-EDE3-OFB and DES-EDE3-CFB, a value `num >= 8` makes the encrypt
+path index past the end of an 8-byte `DES_cblock` allocated on the
+stack inside `DES_ede3_ofb64_encrypt()` / `DES_ede3_cfb64_encrypt()`.
+
+The harness picks the cipher with `data[0] & 1`, takes `data[1]` as
+the `num` parameter, and feeds the remainder as 32 bytes of plaintext.
+The bug fires whenever `num >= 8`.
+
+References
+----------
+- Upstream report: https://github.com/openssl/openssl/issues/30284
+- Fix commit:      134342e (master); 76e891f (stable backport)

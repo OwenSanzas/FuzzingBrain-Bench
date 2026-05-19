@@ -1,0 +1,29 @@
+bug_id: openssl-des-ofb-cfb-overread
+project: openssl
+title: "Stack Buffer Over-Read in DES OFB/CFB64 via Unchecked num Parameter"
+upstream_report: https://github.com/openssl/openssl/issues/30284
+
+target:
+  repo:         https://github.com/openssl/openssl
+  vuln_commit:  22be3f1b8e3d8d09de89794a6d59f00176b32b2d
+  language:     c
+  build_system: openssl-configure
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-03-09

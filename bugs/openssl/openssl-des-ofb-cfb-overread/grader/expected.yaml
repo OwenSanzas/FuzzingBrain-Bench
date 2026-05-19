@@ -1,0 +1,14 @@
+reach:
+  expected_file: crypto/des/ofb64ede.c
+  expected_function: DES_ede3_ofb64_encrypt
+  expected_line_range: [40, 80]
+
+class:
+  expected: oob-read
+  sanitizer: ubsan
+
+site:
+  expected_file: crypto/des/ofb64ede.c
+  expected_line: 58
+  line_tolerance: 5
+  max_frame_distance: 3
