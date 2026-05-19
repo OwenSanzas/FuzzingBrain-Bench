@@ -1,0 +1,29 @@
+bug_id: ghidra-rust-demangle-oom
+project: Ghidra
+title: "OOM / UB in Ghidra Bundled libiberty rust_demangle"
+upstream_report: https://github.com/NationalSecurityAgency/ghidra/security/advisories/GHSA-m94m-fqr3-x442
+
+target:
+  repo:         https://github.com/NationalSecurityAgency/ghidra
+  vuln_commit:  caeeac88ddb5b004736de440db86380ff6e61229
+  language:     c
+  build_system: handrolled
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: null

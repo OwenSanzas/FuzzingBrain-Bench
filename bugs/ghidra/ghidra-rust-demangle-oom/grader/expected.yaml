@@ -1,0 +1,14 @@
+reach:
+  expected_file: ghidra-demangler/rust-demangle.c
+  expected_function: str_buf_append
+  expected_line_range: [1560, 1590]
+
+class:
+  expected: null-deref
+  sanitizer: ubsan
+
+site:
+  expected_file: ghidra-demangler/rust-demangle.c
+  expected_line: 1576
+  line_tolerance: 5
+  max_frame_distance: 3

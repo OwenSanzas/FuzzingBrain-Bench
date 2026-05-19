@@ -388,7 +388,7 @@
         "found_url": "https://github.com/NationalSecurityAgency/ghidra/security/advisories/GHSA-m94m-fqr3-x442",
         "notes": "libFuzzer harness pasted in 'Trigger Method 2' of advisory body"
       },
-      "phase2_status": "deferred"
+      "phase2_status": "shipped"
     },
     {
       "id": "graaljs-illformed-locale",
@@ -1233,8 +1233,8 @@
     }
   ],
   "phase2_summary": {
-    "shipped": 13,
-    "deferred": 26,
+    "shipped": 14,
+    "deferred": 25,
     "total": 39
   }
 }

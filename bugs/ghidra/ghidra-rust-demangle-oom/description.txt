@@ -1,0 +1,24 @@
+OOM / UB in Ghidra Bundled libiberty rust_demangle
+===================================================
+
+Project:     NationalSecurityAgency/ghidra (bundled GPL libiberty)
+Bug class:   null-deref / oom (UBSan/ASan dependent on input)
+Sanitizer:   UBSan (primary)
+
+Ghidra bundles a copy of GNU libiberty at
+`GPL/DemanglerGnu/src/demangler_gnu_v2_41/c/`. The vendored
+`rust_demangle()` shares its bugs with the upstream binutils/GCC copy:
+`str_buf_append()` does pointer arithmetic on a `str_buf_t` whose
+`buf` field can be NULL, and the v0 binder parser has an unbounded
+lifetime-count allocation path.
+
+UBSan catches the null-pointer offset before the OOM path on most
+malformed inputs.
+
+The harness drives `rust_demangle()` on a NUL-terminated copy of the
+fuzz input.
+
+References
+----------
+- Ghidra advisory: https://github.com/NationalSecurityAgency/ghidra/security/advisories/GHSA-m94m-fqr3-x442
+- Sibling bug:     binutils-rust-demangle-oom (same root cause)
