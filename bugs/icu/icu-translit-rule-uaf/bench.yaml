@@ -1,0 +1,29 @@
+bug_id: icu-translit-rule-uaf
+project: icu
+title: "Memory Leak in ICU TransliteratorIDParser::parseFilterID"
+upstream_report: https://unicode-org.atlassian.net/browse/ICU-23365
+
+target:
+  repo:         https://github.com/unicode-org/icu
+  vuln_commit:  8be6575f5c4ea397d384493a435b2932d5c2eaca
+  language:     cpp
+  build_system: autoconf
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [reach, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: null

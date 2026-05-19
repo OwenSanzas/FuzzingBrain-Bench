@@ -1,0 +1,14 @@
+reach:
+  expected_file: icu4c/source/i18n/tridpars.cpp
+  expected_function: parseFilterID
+  expected_line_range: [200, 260]
+
+class:
+  expected: memory-leak
+  sanitizer: lsan
+
+site:
+  expected_file: icu4c/source/i18n/tridpars.cpp
+  expected_line: 229
+  line_tolerance: 5
+  max_frame_distance: 3

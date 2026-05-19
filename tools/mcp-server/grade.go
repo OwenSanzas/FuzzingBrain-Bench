@@ -228,8 +228,9 @@ func runHarness(bin string, invocation []string, pocPath, runDir string, timeout
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = runDir
 	cmd.Env = append(os.Environ(),
-		"ASAN_OPTIONS=abort_on_error=0:exitcode=66:detect_leaks=0",
+		"ASAN_OPTIONS=abort_on_error=0:exitcode=66",
 		"UBSAN_OPTIONS=abort_on_error=0:print_stacktrace=1",
+		"LSAN_OPTIONS=exitcode=66",
 		"TMPDIR="+runDir,
 	)
 	var sout, serr bytes.Buffer
@@ -363,7 +364,7 @@ func mapUBSan(msg string) string {
 	return ""
 }
 
-var frameRe = regexp.MustCompile(`#(\d+)\s+0x[0-9a-fA-F]+\s+in\s+\S+\s+([^:]+):(\d+)`)
+var frameRe = regexp.MustCompile(`#(\d+)\s+0x[0-9a-fA-F]+\s+in\s+.+?\s+(/[^\s:]+):(\d+)`)
 
 func siteMatches(r harnessRun, expected *expectedYAML) bool {
 	if expected.Site.ExpectedFile == "" {
@@ -445,12 +446,12 @@ func buildEvidence(last roundOutcome, expected *expectedYAML) map[string]any {
 	}
 	if last.Capabilities["class"] == "fired" {
 		detected := ""
-		if m := asanErrorLine.FindStringSubmatch(r.stderr); m != nil {
+		if lsanLeakLine.MatchString(r.stderr) {
+			detected = "memory-leak"
+		} else if m := asanErrorLine.FindStringSubmatch(r.stderr); m != nil {
 			detected = canonClass(m[1])
 		} else if m := ubsanErrorLine.FindStringSubmatch(r.stderr); m != nil {
 			detected = mapUBSan(m[1])
-		} else if lsanLeakLine.MatchString(r.stderr) {
-			detected = "memory-leak"
 		}
 		ev["class"] = map[string]any{"sanitizer": expected.Class.Sanitizer, "detected_class": detected}
 	}

@@ -1,0 +1,26 @@
+Memory Leak in ICU TransliteratorIDParser::parseFilterID
+=========================================================
+
+Project:     unicode-org/icu (icu4c)
+Bug class:   memory-leak
+Sanitizer:   LeakSanitizer / AddressSanitizer
+
+`icu::Transliterator::createFromRules()` invokes
+`TransliteratorIDParser::parseFilterID()` while parsing a filter
+clause inside a transliteration rules string. On certain malformed
+rules, `parseFilterID()` allocates an internal UnicodeSet (200 bytes)
+via `uprv_malloc()` but never frees it on the error/abandon path.
+
+The leak is observed every run on the recorded PoC and is reported
+by LeakSanitizer at exit.
+
+The harness drives `createFromRules()` directly with a fuzz-derived
+rules string:
+
+    icu::Transliterator::createFromRules("test", rules, dir, pe, st);
+    if (U_SUCCESS && t) { t->transliterate("Hello"); delete t; }
+
+References
+----------
+- Upstream ticket: https://unicode-org.atlassian.net/browse/ICU-23365
+- Harness:         libFuzzer wrapper around the upstream repro.cpp
