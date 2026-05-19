@@ -1,5 +1,3 @@
-// Adapted from upstream issue #985 - driven by a raw byte[] so PocRunner
-// can invoke it directly without Jazzer.
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
 import java.nio.charset.StandardCharsets;
@@ -18,7 +16,6 @@ public class IntlFuzzer {
             context.eval("js", jsCode);
         } catch (PolyglotException e) {
             if (e.isInternalError()) {
-                // BUG: user input must not surface as an "internal error".
                 throw new RuntimeException("Internal error from user input", e);
             }
         }
