@@ -1,0 +1,14 @@
+reach:
+  expected_file: ""
+  expected_function: ""
+  expected_line_range: []
+
+class:
+  expected: stack-buffer-overflow
+  sanitizer: asan
+
+site:
+  expected_file: font.rs
+  expected_line: 988
+  line_tolerance: 20
+  max_frame_distance: 5

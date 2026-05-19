@@ -1,0 +1,29 @@
+bug_id: harfbuzz-fontations-oob-write
+project: harfbuzz
+title: "OOB Write in HarfBuzz fontations Glyph-Name Callback with size == 0"
+upstream_report: https://github.com/harfbuzz/harfbuzz/issues/5946
+
+target:
+  repo:         https://github.com/harfbuzz/harfbuzz
+  vuln_commit:  edc8c18ef88262fc467a30ab74f05080d6aea6cf
+  language:     c++
+  build_system: meson
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["@@"]
+  rss_limit_mb: 2048
+  timeout_s: 30
+  provenance: fuzzingbrain
+
+capability_set: [crash, class, site]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: fixed
+cve: null
+disclosed: 2026-04-18

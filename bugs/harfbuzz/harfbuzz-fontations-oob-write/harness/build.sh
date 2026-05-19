@@ -16,14 +16,16 @@ if [ "${cmd}" = "build-libs" ]; then
         esac
 
         cp -r /src/harfbuzz /src/hb-${CONFIG_LIB}
-        pushd /src/hb-${CONFIG_LIB} >/dev/null
         # The fontations bug is an OOB write that happens AFTER an unsigned
         # subtract underflows. Rust's debug build catches the underflow as
         # `attempt to subtract with overflow` (panic) BEFORE the OOB happens,
-        # masking the true vulnerability. Disable overflow checks so the
-        # subtraction wraps and the OOB write reaches ASan.
+        # masking the true vulnerability. Patch the rust crate's Cargo.toml
+        # to disable overflow checks for the dev profile so the subtraction
+        # wraps and the OOB write reaches ASan.
+        printf '\n[profile.dev]\noverflow-checks = false\n' \
+            >> /src/hb-${CONFIG_LIB}/src/rust/Cargo.toml
+        pushd /src/hb-${CONFIG_LIB} >/dev/null
         env CC=clang CXX=clang++ CFLAGS="${CF}" CXXFLAGS="${CF}" LDFLAGS="${LF}" \
-            RUSTFLAGS="-C overflow-checks=no" \
             meson setup build-${CONFIG_LIB} \
                 --default-library=static \
                 --buildtype=debug \

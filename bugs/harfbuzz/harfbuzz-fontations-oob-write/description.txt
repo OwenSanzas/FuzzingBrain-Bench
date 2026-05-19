@@ -1,0 +1,40 @@
+OOB Write in HarfBuzz fontations Glyph-Name Callback (size == 0)
+=================================================================
+
+Project:     harfbuzz/harfbuzz
+Bug class:   stack-buffer-overflow (ASan; root cause: oob-write enabled
+             by unchecked unsigned subtraction in the fontations Rust
+             callback)
+Sanitizer:   AddressSanitizer
+
+When `hb_font_get_glyph_name(font, gid, buf, size)` is called with
+`size == 0`, the fontations backend (the Rust crate `harfbuzz_rust`)
+computes `buf.len() - 1` on an unsigned and wraps to `usize::MAX`,
+then calls `copy_from_slice` into a 0-length destination, producing a
+stack-buffer-overflow.
+
+The PoC is the same minimal TTF used by the OTS bug — any input that
+gets past `hb_face_create` is sufficient because the harness
+unconditionally calls `hb_font_get_glyph_name(..., 0)`.
+
+Build notes
+-----------
+1. **Nightly rustc**: HarfBuzz's meson invocation passes `-Z
+   unstable-options --artifact-dir`, which requires nightly cargo.
+   The Dockerfile installs `nightly-2025-04-15` via rustup.
+2. **bindgen**: required by the fontations crate's build.rs.
+   `cargo install bindgen-cli`.
+3. **Overflow checks disabled**: Rust's debug profile catches the
+   underlying unsigned subtract underflow as a panic *before* the
+   OOB write reaches ASan. We patch `src/rust/Cargo.toml` to add
+   `[profile.dev] overflow-checks = false` so the bug is observable
+   under sanitizer instead of mid-Rust.
+
+K_b is [crash, class, site] — reach is dropped because the LLVM
+profile dump doesn't survive an SIGABRT and the call graph through
+the Rust FFI boundary doesn't produce a "buggy function" frame we
+could match against an expected_function name.
+
+References
+----------
+- Upstream issue: https://github.com/harfbuzz/harfbuzz/issues/5946
