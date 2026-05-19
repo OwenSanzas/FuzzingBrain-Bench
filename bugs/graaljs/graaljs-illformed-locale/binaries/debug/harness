@@ -1,7 +1,0 @@
-#!/bin/bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-LIB="${DIR}/../lib"
-exec java -Xmx512m \
-    -cp "${LIB}/classes:${LIB}/deps/*" \
-    -DtargetClass=IntlFuzzer \
-    PocRunner "$@"

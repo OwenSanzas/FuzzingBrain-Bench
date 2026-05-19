@@ -1,7 +1,0 @@
-#!/bin/bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-LIB="${DIR}/../lib"
-exec java -Xmx256m \
-    -cp "${LIB}/classes:${LIB}/pdfbox.jar:${LIB}/deps/*" \
-    -DtargetClass=InlineImageFuzzer \
-    PocRunner "$@"

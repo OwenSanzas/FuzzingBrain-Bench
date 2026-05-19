@@ -1,8 +1,0 @@
-#!/bin/bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-LIB="${DIR}/../lib"
-# -Xmx256m: keep heap small so the decompression bomb hits OOM fast.
-exec java -Xmx256m \
-    -cp "${LIB}/classes:${LIB}/avro-java.jar:${LIB}/deps/*" \
-    -DtargetClass=DecompressionBombFuzzer \
-    PocRunner "$@"
