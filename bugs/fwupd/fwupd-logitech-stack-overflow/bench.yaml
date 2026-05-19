@@ -1,0 +1,29 @@
+bug_id: fwupd-logitech-stack-overflow
+project: fwupd
+title: "Stack Overflow in logitech-rdfu JSON Parsing (Missing Depth Limit)"
+upstream_report: https://github.com/fwupd/fwupd/issues/9779
+
+target:
+  repo:         https://github.com/fwupd/fwupd
+  vuln_commit:  82a0998339c43fd36855492d9c5d68a20102c338
+  language:     c
+  build_system: meson
+
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation: ["-rss_limit_mb=1024", "@@"]
+  rss_limit_mb: 1024
+  timeout_s: 60
+  provenance: fuzzingbrain
+
+capability_set: [crash, class]
+
+reproducibility:
+  base_image_digest: ""
+  snapshot_debian_date: "20260101T000000Z"
+  source_date_epoch: 1735689600
+
+status: open
+cve: null
+disclosed: 2025-12-11
