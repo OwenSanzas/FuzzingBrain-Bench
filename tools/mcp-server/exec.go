@@ -5,11 +5,42 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
+	"syscall"
 	"time"
 )
 
 const execTruncate = 2000
+
+// execEnvDeny lists environment variables that must never reach the agent's
+// shell: they would leak the oracle location or the privilege-separation
+// config, defeating the point of running exec() unprivileged.
+var execEnvDeny = map[string]bool{
+	"BENCH_ORACLE_DIR": true,
+	"BENCH_AGENT_UID":  true,
+	"BENCH_AGENT_GID":  true,
+}
+
+// agentEnv returns the process environment with the oracle/privsep vars
+// stripped. BENCH_BUG_DIR and BENCH_WORKSPACE are kept — the agent is meant
+// to know those.
+func agentEnv() []string {
+	src := os.Environ()
+	out := make([]string, 0, len(src))
+	for _, kv := range src {
+		k := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			k = kv[:i]
+		}
+		if execEnvDeny[k] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
 
 type execParams struct {
 	Cmd      string `json:"cmd"`
@@ -34,6 +65,12 @@ func (s *server) toolExec(args []byte) (any, error) {
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", p.Cmd)
 	cmd.Dir = s.bugDir
+	cmd.Env = agentEnv()
+	if s.dropPrivs {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Credential: &syscall.Credential{Uid: s.agentUID, Gid: s.agentGID},
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

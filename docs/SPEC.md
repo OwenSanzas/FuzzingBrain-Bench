@@ -347,10 +347,20 @@ When a runner starts an episode for this bug, it:
 
 1. Creates a fresh **workspace tmpdir**:
    `$TMPDIR/fbbench-<episode-id>/workspace/`.
-2. Spawns the MCP server (§4) as a subprocess with:
-   - `BENCH_BUG_DIR=<absolute path to bugs/<project>/<bug_id>/>`
+2. Stages an **agent sandbox** bug view holding only agent-safe entries
+   (`description.txt`, `bench.yaml`, `harness/`); the oracle answer keys
+   (`grader/`), the reference solution (`poc/`), and the ground-truth
+   builds (`binaries/`) are withheld from it.
+3. Spawns the MCP server (§4) as a subprocess with:
+   - `BENCH_BUG_DIR=<absolute path to the staged sandbox view>`
    - `BENCH_WORKSPACE=<absolute path to the tmpdir>`
-3. The agent's tool calls operate over those two directories.
+   - `BENCH_ORACLE_DIR=<absolute path to the real bugs/<project>/<bug_id>/>`
+     — the grader reads `expected.yaml` and the binaries from here; the
+     agent's tools never operate on it.
+   - `BENCH_AGENT_UID`/`BENCH_AGENT_GID` (Docker only) — when the server
+     runs as root, `exec()` drops to this unprivileged uid (§7).
+4. The agent's `exec`/`read_file`/`list_directory`/`write_file` operate
+   over the sandbox view and workspace only.
 
 `source/` is **optional** — bugs whose source trees are large may omit it
 and provide `source/checkout.sh` instead.
@@ -496,29 +506,31 @@ read_file(path: string, offset?: int = 0, limit?: int = 65536) → {
 }
 ```
 
-Reads file contents subject to a deny list. The MCP server resolves the
-absolute path (following symlinks, normalizing `..`) and rejects access to:
+Because `BENCH_BUG_DIR` is now the staged sandbox view (§3.1), the oracle
+answer keys, reference PoC, and ground-truth binaries are simply **absent**
+from it — the agent's tools cannot resolve a path to them. As defence in
+depth, `read_file` still resolves the absolute path (following symlinks,
+normalizing `..`) and rejects:
 
 - `<BENCH_WORKSPACE>/grader-run/**` — transient per-round state
-- `<BENCH_BUG_DIR>/grader/expected.yaml` — oracle answer key
-- `<BENCH_BUG_DIR>/grader/buggy_region.json` — reach answer key
+- `<BENCH_BUG_DIR>/grader/**` — oracle answer keys (whole subtree)
+- `<BENCH_BUG_DIR>/poc/**` — reference solution (whole subtree)
 
 Allowed (task prompt / exploration):
 
 - `<BENCH_BUG_DIR>/bench.yaml` — public metadata only (§5.1)
 - `<BENCH_BUG_DIR>/description.txt` — task description (the agent's
   primary task prompt)
-- `<BENCH_BUG_DIR>/harness/**`, `source/**`, `binaries/**` — for
-  inspection
+- `<BENCH_BUG_DIR>/harness/**` — for inspection
 - `<BENCH_WORKSPACE>/**` — agent's scratch
 
-Denied paths return a structured permission-denied error. `list_directory`
-of `<BENCH_BUG_DIR>/grader/` shows denied entries by filename (existence
-isn't itself the leak).
+Denied paths return a structured permission-denied error.
 
-**v1 limitation:** the `exec` tool is not gated against shell-level
-access to denied paths. Documented v1 limitation (§1.4.4) caught by
-audit check A3.
+**Resolved in this revision:** the earlier v1 limitation — `exec` not
+gated against shell-level reads of denied paths — is closed by (1) staging
+the sandbox view so the oracle is not present in `BENCH_BUG_DIR`, and (2)
+under Docker, dropping `exec` to `BENCH_AGENT_UID` while the on-disk oracle
+files are `0600 root` (§7), so even an absolute-path or `find /` read fails.
 
 ### 4.5 Tool: `write_file`
 
@@ -708,11 +720,18 @@ Per `(model, bug, arm)`:
 ### 7.1 Runtime mechanisms
 
 - **Ground-truth binaries.** `grade()` invokes binaries under
-  `BENCH_BUG_DIR/binaries/`. The grader never reads agent-rebuilt source.
-- **Oracle answer key hidden.** `grader/expected.yaml` and
-  `grader/buggy_region.json` are denied by `read_file` (§4.4). v1 does
-  not gate `exec` against shell-level reads of these paths; documented
-  v1 limitation (§1.4.4) caught by audit check A3.
+  `BENCH_ORACLE_DIR/binaries/` (the real bug dir), never the agent's
+  sandbox view, and never agent-rebuilt source.
+- **Oracle outside the agent's reach.** The agent's `BENCH_BUG_DIR` is a
+  staged sandbox (§3.1) that does not contain `grader/`, `poc/`, or
+  `binaries/`; the grader reads `expected.yaml` + binaries from a separate
+  `BENCH_ORACLE_DIR` the agent's tools never touch, and that path is
+  scrubbed from `exec`'s environment.
+- **Privilege separation (Docker).** When the server runs as root with
+  `BENCH_AGENT_UID` set, `exec()` drops to that unprivileged uid while the
+  on-disk oracle files are `0600 root` and their dirs `0700 root`. A
+  shell-level `cat` / `find /` of a denied path then fails with EACCES.
+  This closes the former v1 limitation (`exec` shell-level reads).
 - **Workspace gate.** Only `BENCH_WORKSPACE` is writable.
 - **fd-piped result.** `grade()`'s structured result travels over fd 3.
 - **Truncated tool output.** `exec` results capped at 2000 chars/stream.

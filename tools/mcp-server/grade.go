@@ -134,7 +134,7 @@ func (s *server) toolGrade(args []byte) (any, error) {
 }
 
 func (s *server) loadExpected() (*expectedYAML, error) {
-	path := filepath.Join(s.bugDir, "grader", "expected.yaml")
+	path := filepath.Join(s.oracleDir, "grader", "expected.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read expected.yaml: %w", err)
@@ -166,8 +166,9 @@ func (s *server) runRound(pocPath string, bench *benchYAML, expected *expectedYA
 	}
 
 	// Crash / class / site are all derived from running the release-asan
-	// binary on the PoC.
-	binPath := filepath.Join(s.bugDir, "binaries", "release-asan", "harness")
+	// binary on the PoC. Always the ground-truth binary from oracleDir, never
+	// anything in the agent-facing bug dir.
+	binPath := filepath.Join(s.oracleDir, "binaries", "release-asan", "harness")
 	out := runHarness(binPath, bench.Harness.Invocation, pocPath, runDir, bench.Harness.TimeoutS)
 
 	if _, ok := caps["crash"]; ok {
@@ -186,7 +187,7 @@ func (s *server) runRound(pocPath string, bench *benchYAML, expected *expectedYA
 		}
 	}
 	if _, ok := caps["reach"]; ok {
-		covBin := filepath.Join(s.bugDir, "binaries", "coverage", "harness")
+		covBin := filepath.Join(s.oracleDir, "binaries", "coverage", "harness")
 		if reachFired(covBin, bench.Harness.Invocation, pocPath, runDir, expected) {
 			caps["reach"] = "fired"
 		} else if reachFromBacktrace(out.stderr, expected) {

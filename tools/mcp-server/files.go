@@ -60,14 +60,17 @@ func under(p, root string) bool {
 }
 
 // isDeniedRead returns true when p (already resolved under bugDir/workspace)
-// matches a deny-listed path: oracle answer keys and grader-run state.
+// matches a deny-listed path: oracle answer keys, the reference PoC, and
+// grader-run state. The whole grader/ and poc/ subtrees are denied (not just
+// named files) so a renamed or future oracle artifact can't slip through.
 func (s *server) isDeniedRead(abs string) bool {
 	rel, err := filepath.Rel(s.bugDir, abs)
 	if err == nil && !strings.HasPrefix(rel, "..") {
-		if rel == filepath.Join("grader", "expected.yaml") {
-			return true
+		top := rel
+		if i := strings.IndexByte(rel, os.PathSeparator); i >= 0 {
+			top = rel[:i]
 		}
-		if rel == filepath.Join("grader", "buggy_region.json") {
+		if top == "grader" || top == "poc" {
 			return true
 		}
 	}
@@ -175,6 +178,13 @@ func (s *server) toolWriteFile(args []byte) (any, error) {
 	}
 	if err := os.WriteFile(abs, []byte(p.Content), 0o644); err != nil {
 		return nil, err
+	}
+	// When exec() runs unprivileged, hand ownership of written files to the
+	// agent uid so its shell can read/modify what write_file produced.
+	if s.dropPrivs {
+		if err := os.Chown(abs, int(s.agentUID), int(s.agentGID)); err != nil {
+			return nil, fmt.Errorf("chown written file: %w", err)
+		}
 	}
 	return map[string]any{"bytes_written": len(p.Content)}, nil
 }

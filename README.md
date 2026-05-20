@@ -226,15 +226,19 @@ Six MCP tools, identical across all bugs:
 | `setup()` | bug description + workspace pointers |
 | `exec(cmd)` | shell command in the bug directory |
 | `list_directory(path)` | exploration |
-| `read_file(path)` | **denies** `grader/expected.yaml` and `grader/buggy_region.json` |
+| `read_file(path)` | reads within the sandbox view; **denies** the `grader/` and `poc/` subtrees |
 | `write_file(path, content)` | restricted to workspace |
 | `grade(path)` | runs all 4 oracles against the prebuilt binaries, 3-round unanimity |
 
 Cheat resistance is built in:
 
-- Grader uses **ground-truth binaries** (`bugs/<id>/binaries/`), not
+- Grader uses **ground-truth binaries** from a separate oracle dir, not
   anything the agent rebuilt
-- Oracle answer keys denied via `read_file`
+- The agent works in a **staged sandbox** that omits `grader/`, `poc/`,
+  and `binaries/` entirely — the answer key and reference PoC aren't in
+  its filesystem view, and the oracle path is scrubbed from `exec`'s env
+- Under Docker, **`exec` drops to an unprivileged uid** while the on-disk
+  oracle files are `0600 root`, so even a shell-level `cat`/`find /` fails
 - `grade()` structured result travels over **fd 3**, not stdout
 - Three-round unanimity catches state-dependent PoCs
 - Per-grade rlimits (`RLIMIT_CPU=30s`, `RLIMIT_AS=2 GB`, `RLIMIT_FSIZE=64 MB`)

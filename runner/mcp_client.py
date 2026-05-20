@@ -7,16 +7,51 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 from typing import Any
 
+# Entries copied into the agent-facing sandbox bug view. Everything else in
+# the real bug dir — grader/ (answer key), poc/ (reference solution), and
+# binaries/ (ground-truth builds) — is deliberately withheld: the agent
+# reasons from harness source and tests via grade(), which runs the trusted
+# binaries from the oracle dir server-side.
+SANDBOX_ENTRIES = ("description.txt", "bench.yaml", "harness", "Dockerfile", "PROVENANCE.md")
+
+
+def stage_bug_view(real_bug_dir: str) -> str:
+    """Build a per-episode sandbox dir holding only agent-safe entries.
+
+    Returns the sandbox path; the caller passes it as BENCH_BUG_DIR and the
+    real bug dir as BENCH_ORACLE_DIR. Withheld: grader/, poc/, binaries/.
+    """
+    sandbox = tempfile.mkdtemp(prefix="fbbench-bugview-")
+    # mkdtemp is 0700; the agent's exec() may run under a different uid
+    # (Tier 2 privsep), so make the view traversable/readable.
+    os.chmod(sandbox, 0o755)
+    for name in SANDBOX_ENTRIES:
+        src = os.path.join(real_bug_dir, name)
+        if not os.path.exists(src):
+            continue
+        dst = os.path.join(sandbox, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    return sandbox
+
 
 class MCPClient:
-    def __init__(self, server_bin: str, bug_dir: str, workspace: str):
+    def __init__(self, server_bin: str, bug_dir: str, workspace: str,
+                 oracle_dir: str | None = None):
         env = os.environ.copy()
         env["BENCH_BUG_DIR"] = bug_dir
         env["BENCH_WORKSPACE"] = workspace
+        # Grader reads expected.yaml + binaries from the oracle dir; the agent
+        # never sees it. Defaults to bug_dir for back-compat when unset.
+        env["BENCH_ORACLE_DIR"] = oracle_dir or bug_dir
         self._proc = subprocess.Popen(
             [server_bin],
             stdin=subprocess.PIPE,

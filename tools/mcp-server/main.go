@@ -4,8 +4,15 @@
 // convention. Implements the 6-tool contract from SPEC §4.
 //
 // Environment:
-//   BENCH_BUG_DIR    absolute path to bugs/<project>/<bug_id>/
+//   BENCH_BUG_DIR    absolute path to the agent-facing bug dir (no oracle files)
 //   BENCH_WORKSPACE  absolute path to the runner's per-episode tmpdir
+//   BENCH_ORACLE_DIR absolute path the grader reads expected.yaml + binaries
+//                    from. Defaults to BENCH_BUG_DIR (so the no-AI fb-bench
+//                    CLI, which points BUG_DIR at the real bug dir, still works).
+//   BENCH_AGENT_UID  numeric uid to run exec() as. When set and the server is
+//   BENCH_AGENT_GID  root, exec subprocesses drop to this (uid,gid) so the
+//                    agent's shell cannot read root-owned oracle files even by
+//                    absolute path / `find /`. No-op when unset or not root.
 //
 // Diagnostics go to stderr; nothing else.
 package main
@@ -16,6 +23,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strconv"
 )
 
 type rpcRequest struct {
@@ -41,6 +50,12 @@ type rpcError struct {
 type server struct {
 	bugDir    string
 	workspace string
+	oracleDir string
+	// agentUID/agentGID are >0 and dropPrivs true only when BENCH_AGENT_UID is
+	// set and the server runs as root; exec() then drops to this credential.
+	agentUID  uint32
+	agentGID  uint32
+	dropPrivs bool
 	enc       *json.Encoder
 }
 
@@ -53,6 +68,10 @@ func main() {
 	if bugDir == "" || workspace == "" {
 		log.Fatal("BENCH_BUG_DIR and BENCH_WORKSPACE must be set")
 	}
+	oracleDir := os.Getenv("BENCH_ORACLE_DIR")
+	if oracleDir == "" {
+		oracleDir = bugDir
+	}
 
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		log.Fatalf("workspace: %v", err)
@@ -61,7 +80,33 @@ func main() {
 	srv := &server{
 		bugDir:    bugDir,
 		workspace: workspace,
+		oracleDir: oracleDir,
 		enc:       json.NewEncoder(os.Stdout),
+	}
+
+	// Tier 2: privilege separation for exec(). Only engages when we are root
+	// and an agent uid is configured — otherwise exec runs as the server uid
+	// (unchanged behaviour, relying on Tier 1 sandbox staging by the runner).
+	if uidStr := os.Getenv("BENCH_AGENT_UID"); uidStr != "" && os.Geteuid() == 0 {
+		uid, err := strconv.Atoi(uidStr)
+		if err != nil || uid <= 0 {
+			log.Fatalf("BENCH_AGENT_UID must be a positive integer, got %q", uidStr)
+		}
+		gid := uid
+		if g := os.Getenv("BENCH_AGENT_GID"); g != "" {
+			if gv, err := strconv.Atoi(g); err == nil && gv > 0 {
+				gid = gv
+			}
+		}
+		srv.agentUID = uint32(uid)
+		srv.agentGID = uint32(gid)
+		srv.dropPrivs = true
+		// The agent's exec/write_file land in workspace; make it owned by the
+		// unprivileged uid so the shell can create and edit files there.
+		if err := chownTree(workspace, uid, gid); err != nil {
+			log.Printf("warn: chown workspace: %v", err)
+		}
+		log.Printf("privilege separation on: exec() runs as uid=%d gid=%d", uid, gid)
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -248,4 +293,18 @@ func mustJSON(v any) string {
 		return fmt.Sprintf("%v", v)
 	}
 	return string(b)
+}
+
+// chownTree recursively chowns root to (uid,gid). Best-effort: it logs and
+// continues past individual failures so a single odd entry can't abort startup.
+func chownTree(root string, uid, gid int) error {
+	return filepath.Walk(root, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if err := os.Lchown(p, uid, gid); err != nil {
+			log.Printf("warn: chown %s: %v", p, err)
+		}
+		return nil
+	})
 }
