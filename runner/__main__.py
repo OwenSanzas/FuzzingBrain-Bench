@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from episode import run_episode  # noqa: E402
 from backends import make_backend  # noqa: E402
 from mcp_client import stage_bug_view  # noqa: E402
+from pricing import cost_usd  # noqa: E402
 
 
 def load_dotenv(repo_root: Path) -> None:
@@ -106,12 +107,10 @@ def main() -> int:
         "turns_used": result.turns_used,
         "duration_s": result.duration_s,
     }
+    cost = {"model": result.model,
+            **cost_usd(result.model, result.input_tokens, result.output_tokens)}
+    score["total_usd"] = cost["total_usd"]
     (out_dir / "score.json").write_text(json.dumps(score, indent=2))
-    cost = {
-        "model": result.model,
-        "input_tokens": result.input_tokens,
-        "output_tokens": result.output_tokens,
-    }
     (out_dir / "cost.json").write_text(json.dumps(cost, indent=2))
 
     print(json.dumps(score, indent=2))

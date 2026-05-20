@@ -25,7 +25,7 @@ def provider_for(model_id: str) -> str:
 # provider lists is still runnable by passing it to --model directly.
 DEFAULT_SWEEP: dict[str, list[str]] = {
     "anthropic": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
-    "openai":    ["gpt-5.5", "gpt-5.1", "gpt-5.4-mini"],
+    "openai":    ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
     "gemini":    ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-2.5-flash"],
 }
 

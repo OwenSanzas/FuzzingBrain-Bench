@@ -96,6 +96,8 @@ class GeminiBackend:
                         input=dict(fc.args or {}),
                         meta={"thought_signature": sig} if sig is not None else {}))
         if resp.usage_metadata:
-            c.input_tokens = resp.usage_metadata.prompt_token_count or 0
-            c.output_tokens = resp.usage_metadata.candidates_token_count or 0
+            um = resp.usage_metadata
+            c.input_tokens = um.prompt_token_count or 0
+            # Thinking tokens are billed as output but reported separately.
+            c.output_tokens = (um.candidates_token_count or 0) + (um.thoughts_token_count or 0)
         return c
