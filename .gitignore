@@ -17,3 +17,7 @@ references/
 
 .venv/
 runs/
+
+# Secrets — never commit
+.env
+*.key
