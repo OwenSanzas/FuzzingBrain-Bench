@@ -49,10 +49,29 @@ def find_bug_dir(repo_root: Path, bug_id: str) -> Path:
     raise FileNotFoundError(f"bug {bug_id} not found under {repo_root}/bugs")
 
 
+def print_models() -> None:
+    from registry import CATALOG, default_sweep
+    from pricing import PRICES
+    sweep = set(default_sweep())
+    print(f"\n  {len(CATALOG)} supported models "
+          "(any other provider id is still runnable via --model)\n")
+    print(f"  {'model':26s} {'provider':10s} {'tier':9s} "
+          f"{'in $/M':>7s} {'out $/M':>8s}  sweep")
+    print(f"  {'-'*26} {'-'*10} {'-'*9} {'-'*7} {'-'*8}  -----")
+    for model, provider, tier in CATALOG:
+        rate = PRICES.get(model)
+        ins = f"{rate[0]:.2f}" if rate else "?"
+        outs = f"{rate[1]:.2f}" if rate else "?"
+        mark = "✓" if model in sweep else ""
+        print(f"  {model:26s} {provider:10s} {tier:9s} {ins:>7s} {outs:>8s}  {mark}")
+    print("\n  default sweep (--model omitted in batch): " + ", ".join(default_sweep()))
+    print()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="FuzzingBrain Bench runner")
-    ap.add_argument("--bug", required=True, help="bug_id (e.g. netsnmp-vacm-parse-npd)")
-    ap.add_argument("--model", default="claude-opus-4-7", help="Anthropic model id")
+    ap.add_argument("--bug", help="bug_id (e.g. netsnmp-vacm-parse-npd)")
+    ap.add_argument("--model", default="claude-opus-4-7", help="model id (claude*/gpt*/gemini*)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-turns", type=int, default=60)
     ap.add_argument("--output", default="runs", help="output directory root")
@@ -60,8 +79,16 @@ def main() -> int:
                     help="path to mcp-server binary (default: ./bin/mcp-server)")
     ap.add_argument("--repo-root", default=None,
                     help="benchmark repo root (default: parent of runner/)")
-    ap.add_argument("--api-key", default=None, help="Anthropic API key (or use ANTHROPIC_API_KEY)")
+    ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
+    ap.add_argument("--list-models", action="store_true",
+                    help="print the supported-model catalog and exit")
     args = ap.parse_args()
+
+    if args.list_models:
+        print_models()
+        return 0
+    if not args.bug:
+        ap.error("--bug is required (or use --list-models)")
 
     repo_root = Path(args.repo_root or Path(__file__).resolve().parent.parent)
     load_dotenv(repo_root)
