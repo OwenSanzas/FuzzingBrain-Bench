@@ -139,6 +139,9 @@ reproducibility audit trail (snapshot.debian.org pinning,
 
 ## Available bugs (v1)
 
+**Full table with project, language, bug class, and per-bug `K_b`:
+[BUGS.md](BUGS.md).** A representative slice:
+
 ```
 avro-neg-block-size           binutils-rust-demangle-oom
 avro-neg-string-len           dtc-fdt32-misalign
