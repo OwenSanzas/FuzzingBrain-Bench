@@ -58,6 +58,16 @@ def cell_dir(out: Path, bug: str, model: str, seed: int) -> Path:
     return out / bug / model / f"seed-{seed}"
 
 
+def bug_kb(bug: str) -> list[str]:
+    """The capability_set (required flags) for a bug, from its bench.yaml."""
+    import re
+    for p in (REPO / "bugs").glob(f"*/{bug}/bench.yaml"):
+        m = re.search(r"capability_set\s*:\s*\[(.*?)\]", p.read_text(), re.S)
+        if m:
+            return [x.strip() for x in m.group(1).split(",") if x.strip()]
+    return ["reach", "crash", "class", "site"]
+
+
 def run_cell(model: str, bug: str, seed: int, max_turns: int, out: Path,
              timeout: int) -> dict | None:
     cmd = RUNNER + ["--bug", bug, "--model", model, "--seed", str(seed),
@@ -102,9 +112,8 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             n += 1
             for k in agg:
                 agg[k] += int(caps[k])
-            # "solved" = every flag the bug requires fired; approximate with
-            # all four here (full K_b check would read bench.yaml).
-            if all(caps.values()):
+            # solved = every flag in the bug's K_b fired (per bench.yaml).
+            if all(caps[k] for k in bug_kb(bug)):
                 solved += 1
         print(f"  {model:24s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
               f"{agg['crash']:>6d} {agg['class']:>6d} {agg['site']:>6d} "
