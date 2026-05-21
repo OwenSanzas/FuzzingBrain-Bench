@@ -52,6 +52,24 @@ func (s *server) loadBench() (*benchYAML, error) {
 	return &b, nil
 }
 
+// synthDescription builds a minimal task prompt from public bench.yaml fields
+// for bugs that ship no description.txt. The agent still has the harness source
+// and grade() feedback to work from.
+func synthDescription(b *benchYAML) string {
+	out := b.Title + "\n\n"
+	out += fmt.Sprintf("Project: %s\n", b.Project)
+	if b.UpstreamReport != "" {
+		out += "Upstream report: " + b.UpstreamReport + "\n"
+	}
+	out += "\n(No long-form description.txt ships for this bug; reconstruct the " +
+		"bug from the harness source and the upstream report, then drive the " +
+		"sanitizer-instrumented harness to re-trigger the documented crash.)\n"
+	if b.Notes != "" {
+		out += "\nNotes:\n" + b.Notes + "\n"
+	}
+	return out
+}
+
 func (s *server) toolSetup(_ []byte) (any, error) {
 	bench, err := s.loadBench()
 	if err != nil {
@@ -60,7 +78,9 @@ func (s *server) toolSetup(_ []byte) (any, error) {
 	descPath := filepath.Join(s.bugDir, "description.txt")
 	desc, err := os.ReadFile(descPath)
 	if err != nil {
-		return nil, fmt.Errorf("read description.txt: %w", err)
+		// Fallback for bugs that ship no description.txt: synthesize a task
+		// prompt from public bench.yaml fields so the episode can still run.
+		desc = []byte(synthDescription(bench))
 	}
 	return map[string]any{
 		"bug_id":   bench.BugID,
