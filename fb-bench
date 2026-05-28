@@ -322,12 +322,20 @@ def cmd_run(args) -> int:
     # ---- pick output dir --------------------------------------------------
     if args.output:
         out_dir = Path(args.output)
+        exp_label = f"(explicit --output)"
     else:
-        # No --output: drop the result in the next unused
-        # runs/<bug>/<model>/run-N/ — N is the smallest int that doesn't
-        # collide. Past data lives at runs/<bug>/<model>/seed-N/, so we use
-        # run-N to avoid mixing two naming conventions in one directory.
-        base = REPO / "runs" / args.bug_id / model
+        # Two-level layout: runs/<exp>/<bug>/<model>/run-N/. The exp
+        # namespace lets you keep different campaigns (paper-v1 / smoke /
+        # tuning) from polluting each other. Omitted --exp → auto-pick a
+        # timestamped name so each casual run is isolated.
+        if args.exp:
+            exp = args.exp
+            exp_label = f"--exp {exp}"
+        else:
+            import datetime
+            exp = "exp-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            exp_label = f"auto-assigned (no --exp given)"
+        base = REPO / "runs" / exp / args.bug_id / model
         base.mkdir(parents=True, exist_ok=True)
         n = 0
         while (base / f"run-{n}").exists():
@@ -348,6 +356,7 @@ def cmd_run(args) -> int:
     print()
     print(_bold("  fb-bench run  ") + _cyan(args.bug_id) +
           _dim(f"  model={model}  max-turns={args.max_turns}"))
+    print(_dim(f"  exp:       {exp_label}"))
     print(_dim(f"  output:    {out_dir}"))
     print()
     return subprocess.call(cmd, cwd=str(REPO))
@@ -497,8 +506,11 @@ def main() -> int:
                         help="model id (default: auto-pick from provider key in .env)")
     sp_run.add_argument("--max-turns", type=int, default=300,
                         help="turn budget (default: 300, matches ExploitBench)")
+    sp_run.add_argument("--exp", "-e", default=None,
+                        help="experiment namespace (default: auto-assigned exp-<timestamp>); "
+                             "groups runs into runs/<exp>/<bug>/<model>/run-N/")
     sp_run.add_argument("--output", "-o", default=None,
-                        help="output dir (default: auto-pick runs/<bug>/<model>/run-N/)")
+                        help="literal output dir; overrides --exp")
     sp_run.add_argument("--preserve-pocs", action="store_true",
                         help="save every graded blob into <out>/pocs/{solved,failed}/")
     sp_run.add_argument("--api-key", default=None,

@@ -44,21 +44,27 @@ from your `.env`. Output lands in `runs/netsnmp-vacm-parse-npd/<model>/run-0/`.
 ## Run one case
 
 ```bash
-./fb-bench run <bug_id>                               # auto-pick model + output
+./fb-bench run <bug_id>                               # auto-pick model + exp namespace
 ./fb-bench run mongoose-mg-match-overflow             # claude-opus-4-7 by default
 ./fb-bench run mongoose-mg-match-overflow --model gpt-5.5
+./fb-bench run mongoose-mg-match-overflow --exp paper-v1     # name this experiment
 ./fb-bench run mongoose-mg-match-overflow --preserve-pocs
-./fb-bench run mongoose-mg-match-overflow -o /tmp/foo
+./fb-bench run mongoose-mg-match-overflow -o /tmp/foo        # literal path, no nesting
 ```
 
 Each run produces:
 
 ```
-runs/<bug>/<model>/run-N/
+runs/<exp>/<bug>/<model>/run-N/
   ├─ episode.jsonl    turn-by-turn trace (assistant + tool calls + tool results)
   ├─ score.json       4-flag bitmap + tier_score (0–4) + cost in USD
   └─ cost.json        input/output token usage + per-rate $ breakdown
 ```
+
+**Experiment namespace (`--exp`)** — top-level grouping so different
+campaigns never pollute each other. If you don't pass `--exp`, you get
+an auto-assigned `exp-YYYYMMDD-HHMMSS/` so every casual run is isolated.
+Reuse a name (`--exp paper-v1`) to keep related runs together.
 
 With `--preserve-pocs`, every blob the model graded is saved bucketed
 by whether it satisfied the bug's required flag set `K_b`:
@@ -77,9 +83,10 @@ by whether it satisfied the bug's required flag set `K_b`:
 |---|---|---|
 | `<bug_id>` | *(required)* | one of the 37 IDs — see `./fb-bench list` |
 | `--model M` | auto-detect from `.env` | any provider id; see `./fb-bench models` |
-| `-o / --output DIR` | `runs/<bug>/<model>/run-N/` (next free N) | literal output dir |
+| `-e / --exp NAME` | auto `exp-<timestamp>` | experiment namespace, groups runs into `runs/<NAME>/...` |
+| `-o / --output DIR` | (uses `--exp`) | literal output dir; overrides `--exp` |
 | `--preserve-pocs` | off | save every graded blob into `pocs/{solved,failed}/` |
-| `--max-turns N` | 60 | agent turn budget |
+| `--max-turns N` | 300 | agent turn budget (matches ExploitBench `v8.yaml`) |
 | `--api-key K` | reads `.env` | override the provider key |
 
 ### Supported models
@@ -102,24 +109,29 @@ Any model id is accepted — the table above is just the priced + smoke-tested c
 
 ```bash
 # Default sweep: 6 models × 37 bugs × 1 sample = 222 episodes
-python scripts/sweep.py --models sweep --bugs all
+python scripts/sweep.py --models sweep --bugs all --exp paper-v2
 
 # Single model across every bug
-python scripts/sweep.py --models gpt-5.5 --bugs all
+python scripts/sweep.py --models gpt-5.5 --bugs all --exp gpt55-baseline
 
 # Best-of-3 union per (model, bug) — runs 3 independent samples each
-python scripts/sweep.py --models claude-opus-4-7 --bugs all --samples 0,1,2
+python scripts/sweep.py --models claude-opus-4-7 --bugs all --samples 0,1,2 --exp opus-best-of-3
 
 # Keep every graded blob (bucketed by solved/failed)
-python scripts/sweep.py --models gpt-5.5 --bugs all --preserve-pocs
+python scripts/sweep.py --models gpt-5.5 --bugs all --preserve-pocs --exp poc-corpus
 
-# Re-aggregate the leaderboard from existing runs/ without re-running
-python scripts/sweep.py --report-only
+# Re-aggregate an existing experiment without re-running
+python scripts/sweep.py --report-only --exp paper-v2
 ```
 
-The sweep is **resumable**: it skips any cell whose `score.json` already
-exists. Kill it and re-run, same arguments, to continue. Per-episode
-timeout `--timeout 1800` (30 min) by default.
+The sweep is **resumable**: pass the same `--exp` and it skips cells
+whose `score.json` already exists. Per-episode timeout `--timeout 1800`
+(30 min) by default. Omit `--exp` for ad-hoc runs — you'll get
+`runs/exp-<timestamp>/` auto-assigned.
+
+> The legacy 518-cell pilot dataset (14 models × 37 bugs) lives under
+> `runs/pilot-v1/` — published as the v1 leaderboard. Use
+> `--exp pilot-v1 --report-only` to re-aggregate it.
 
 ---
 

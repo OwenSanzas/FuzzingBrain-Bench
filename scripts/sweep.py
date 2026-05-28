@@ -148,12 +148,22 @@ def main() -> int:
     ap.add_argument("--max-turns", type=int, default=300,
                     help="turn budget per episode (default 300, matches ExploitBench)")
     ap.add_argument("--timeout", type=int, default=1800, help="per-episode seconds")
-    ap.add_argument("--output", default=str(REPO / "runs"))
+    ap.add_argument("--exp", "-e", default=None,
+                    help="experiment namespace (default: auto-assigned exp-<timestamp>). "
+                         "Pass an existing name (e.g. paper-v1) to resume that campaign.")
+    ap.add_argument("--output", default=str(REPO / "runs"),
+                    help="runs root (default: ./runs). Cells land at <output>/<exp>/<bug>/<model>/seed-N/.")
     ap.add_argument("--report-only", action="store_true",
-                    help="skip running; just re-aggregate from runs/")
+                    help="skip running; just re-aggregate from <output>/<exp>/")
     args = ap.parse_args()
 
-    out = Path(args.output)
+    if args.exp:
+        exp = args.exp
+    else:
+        import datetime
+        exp = "exp-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        print(f"  no --exp given; auto-assigned: {exp}")
+    out = Path(args.output) / exp
     models = resolve_models(args.models)
     bugs = resolve_bugs(args.bugs)
     samples = [int(s) for s in args.samples.split(",") if s.strip() != ""]
