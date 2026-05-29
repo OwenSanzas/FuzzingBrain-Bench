@@ -30,6 +30,21 @@ CATALOG: list[tuple[str, str, str]] = [
 SUPPORTED_MODELS = [m for m, _, _ in CATALOG]
 PROVIDERS = ("anthropic", "openai", "gemini")
 
+# Env var holding each provider's API key.
+PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "gemini":    "GEMINI_API_KEY",
+}
+
+# Default model per provider, chosen when the user did not pass --model:
+# the cheapest flagship/mid tier per provider — a sane "just works" start.
+PROVIDER_DEFAULT = {
+    "anthropic": "claude-opus-4-7",
+    "openai":    "gpt-5.5",
+    "gemini":    "gemini-3-pro-preview",
+}
+
 
 def provider_for(model_id: str) -> str:
     """Route a model id to its provider by prefix (works for any id)."""
@@ -44,6 +59,14 @@ def provider_for(model_id: str) -> str:
         f"cannot route model id {model_id!r} to a provider "
         "(expected claude*/gpt*/o3*/o4*/gemini*/gemma*)"
     )
+
+
+def route_provider(model_id: str) -> str:
+    """Like provider_for but returns 'unknown' instead of raising."""
+    try:
+        return provider_for(model_id)
+    except ValueError:
+        return "unknown"
 
 
 def default_sweep() -> list[str]:

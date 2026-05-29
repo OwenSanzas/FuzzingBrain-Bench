@@ -109,19 +109,19 @@ Any model id is accepted — the table above is just the priced + smoke-tested c
 
 ```bash
 # Default sweep: 6 models × 37 bugs × 1 sample = 222 episodes
-python scripts/sweep.py --models sweep --bugs all --exp paper-v2
+python -m fbbench.sweep.orchestrator --models sweep --bugs all --exp paper-v2
 
 # Single model across every bug
-python scripts/sweep.py --models gpt-5.5 --bugs all --exp gpt55-baseline
+python -m fbbench.sweep.orchestrator --models gpt-5.5 --bugs all --exp gpt55-baseline
 
 # Best-of-3 union per (model, bug) — runs 3 independent samples each
-python scripts/sweep.py --models claude-opus-4-7 --bugs all --samples 0,1,2 --exp opus-best-of-3
+python -m fbbench.sweep.orchestrator --models claude-opus-4-7 --bugs all --samples 0,1,2 --exp opus-best-of-3
 
 # Keep every graded blob (bucketed by solved/failed)
-python scripts/sweep.py --models gpt-5.5 --bugs all --preserve-pocs --exp poc-corpus
+python -m fbbench.sweep.orchestrator --models gpt-5.5 --bugs all --preserve-pocs --exp poc-corpus
 
 # Re-aggregate an existing experiment without re-running
-python scripts/sweep.py --report-only --exp paper-v2
+python -m fbbench.sweep.orchestrator --report-only --exp paper-v2
 ```
 
 The sweep is **resumable**: pass the same `--exp` and it skips cells
@@ -241,7 +241,8 @@ resistance), §2.5 (randomization sources).
 
 ```
 FuzzingBrain-Bench/
-├── fb-bench                      # CLI (this is what you run)
+├── fb-bench                      # thin launcher (runs `python -m fbbench`)
+├── pyproject.toml                # installable package (pip install -e .)
 ├── bugs/<project>/<bug_id>/      # 37 bug bundles
 │   ├── bench.yaml                #   public metadata + capability_set
 │   ├── description.txt           #   the prompt the agent sees
@@ -251,8 +252,14 @@ FuzzingBrain-Bench/
 │   ├── Dockerfile                #   pinned repro recipe
 │   └── grader/expected.yaml      #   ORACLE ANSWER KEY (denied to the agent)
 ├── tools/mcp-server/             # Go MCP server (6 tools, stdio JSON-RPC 2.0)
-├── runner/                       # Python episode driver (Anthropic/OpenAI/Gemini)
-├── scripts/sweep.py              # Batch orchestrator (resumable)
+├── fbbench/                      # the Python package
+│   ├── cli/                      #   the fb-bench CLI (list/show/grade/run/…)
+│   ├── models/                   #   model catalog, provider routing, pricing
+│   ├── grading/                  #   deterministic grade() oracle + bench.yaml
+│   ├── runner/                   #   episode driver (Anthropic/OpenAI/Gemini)
+│   ├── sweep/                    #   batch orchestrator + codex arm (resumable)
+│   └── prompts.py                #   every model-facing prompt, one place
+├── tests/                        # pytest suite (oracle + import + CLI smoke)
 └── docs/SPEC.md, benchmark.html  # Spec + public site
 ```
 

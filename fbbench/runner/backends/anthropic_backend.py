@@ -40,7 +40,7 @@ class AnthropicBackend:
     def complete(self, system, messages, tools, max_tokens) -> Completion:
         api_tools = [{"name": t["name"], "description": t["description"],
                       "input_schema": t["input_schema"]} for t in tools]
-        resp = self._client.messages.create(
+        with self._client.messages.stream(
             model=self.model,
             max_tokens=max_tokens,
             system=system,
@@ -48,7 +48,8 @@ class AnthropicBackend:
             messages=self._to_blocks(messages),
             temperature=1.0,
             metadata={"user_id": "fbbench"},
-        )
+        ) as stream:
+            resp = stream.get_final_message()
         c = Completion(stop_reason=resp.stop_reason or "")
         for block in resp.content:
             if block.type == "text":

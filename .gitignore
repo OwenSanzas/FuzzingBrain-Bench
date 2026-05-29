@@ -6,6 +6,12 @@ __pycache__/
 .idea/
 .vscode/
 
+# Python packaging / test artifacts
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
 # Local-only working notes (kept out of the public repo)
 背景.md
 report_poc.md

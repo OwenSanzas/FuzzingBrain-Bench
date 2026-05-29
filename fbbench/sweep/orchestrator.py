@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Batch orchestrator for FuzzingBrain Bench.
 
-Runs a (models x bugs x samples) matrix through `python -m runner`, one
+Runs a (models x bugs x samples) matrix through `python -m fbbench.runner`, one
 episode per subprocess (isolated + per-episode timeout), resumable (skips
 cells whose score.json already exists), with a live cost tally and a final
 leaderboard. Each cell lands at runs/<bug>/<model>/seed-N/ where N is the
@@ -10,17 +10,17 @@ dataset; the runner itself has no --seed arg).
 
 Examples:
   # cost probe: opus on 5 bugs, 1 sample
-  python scripts/sweep.py --models claude-opus-4-7 \\
+  python -m fbbench.sweep.orchestrator --models claude-opus-4-7 \\
       --bugs mongoose-mg-match-overflow,netsnmp-vacm-parse-npd,jsonjava-jsonml-classcast,simdutf-utf16-utf8-overflow,openldap-parse-whsp
 
   # full sweep, default lineup, 2 samples per (model, bug) for best-of-2 union
-  python scripts/sweep.py --models sweep --bugs all --samples 0,1
+  python -m fbbench.sweep.orchestrator --models sweep --bugs all --samples 0,1
 
   # keep every graded blob (bucketed by solved/failed)
-  python scripts/sweep.py --models sweep --bugs all --samples 0 --preserve-pocs
+  python -m fbbench.sweep.orchestrator --models sweep --bugs all --samples 0 --preserve-pocs
 
   # just re-aggregate the leaderboard from existing runs/
-  python scripts/sweep.py --report-only
+  python -m fbbench.sweep.orchestrator --report-only
 """
 from __future__ import annotations
 
@@ -31,17 +31,18 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-RUNNER = [sys.executable, "-m", "runner"]
-sys.path.insert(0, str(REPO / "runner"))
+from fbbench.grading import capability_set, find_bug, list_bugs
+from fbbench.models import SUPPORTED_MODELS, default_sweep
+from fbbench.paths import REPO
+
+RUNNER = [sys.executable, "-m", "fbbench.runner"]
 
 
 def discover_bugs() -> list[str]:
-    return sorted(p.name for p in (REPO / "bugs").glob("*/*") if (p / "bench.yaml").is_file())
+    return [name for name, _ in list_bugs()]
 
 
 def resolve_models(spec: str) -> list[str]:
-    from registry import default_sweep, SUPPORTED_MODELS
     if spec == "sweep":
         return default_sweep()
     if spec == "all":
@@ -71,12 +72,8 @@ def cell_dir(out: Path, bug: str, model: str, sample: int) -> Path:
 
 def bug_kb(bug: str) -> list[str]:
     """The capability_set (required flags) for a bug, from its bench.yaml."""
-    import re
-    for p in (REPO / "bugs").glob(f"*/{bug}/bench.yaml"):
-        m = re.search(r"capability_set\s*:\s*\[(.*?)\]", p.read_text(), re.S)
-        if m:
-            return [x.strip() for x in m.group(1).split(",") if x.strip()]
-    return ["reach", "crash", "class", "site"]
+    bd = find_bug(bug)
+    return capability_set(bd) if bd else ["reach", "crash", "class", "site"]
 
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,

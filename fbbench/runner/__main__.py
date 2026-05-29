@@ -1,17 +1,8 @@
-"""CLI entrypoint for the FuzzingBrain Bench runner.
+"""CLI entrypoint for the episode driver — `python -m fbbench.runner`.
 
-Usage:
-  python -m runner --bug netsnmp-vacm-parse-npd \\
-                   --model claude-opus-4-7 \\
-                   --max-turns 60 \\
-                   --out-dir runs/my-experiment/
-
-Or with the legacy nesting (kept for batch sweep scripts):
-  python -m runner --bug X --model Y --output runs/   # -> runs/X/Y/
-
-For most workflows use `./fb-bench run <bug>` from the repo root — it
-wraps this entry, picks a model from your .env, and auto-creates a
-unique output dir.
+One invocation = one (model, bug) episode written to --out-dir. Most users go
+through `fb-bench run` (which wraps this, picks a model from .env, and creates
+a unique output dir); the batch sweep also shells out to this entry per cell.
 """
 from __future__ import annotations
 
@@ -22,40 +13,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from episode import run_episode  # noqa: E402
-from backends import make_backend  # noqa: E402
-from mcp_client import stage_bug_view  # noqa: E402
-from pricing import cost_usd  # noqa: E402
-
-
-def load_dotenv(repo_root: Path) -> None:
-    """Best-effort load of repo .env so provider keys are available."""
-    import os
-    env = repo_root / ".env"
-    if not env.is_file():
-        return
-    for line in env.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip())
-
-
-def find_bug_dir(repo_root: Path, bug_id: str) -> Path:
-    for sub in (repo_root / "bugs").iterdir():
-        if not sub.is_dir():
-            continue
-        cand = sub / bug_id
-        if cand.is_dir():
-            return cand
-    raise FileNotFoundError(f"bug {bug_id} not found under {repo_root}/bugs")
+from fbbench.env import load_dotenv
+from fbbench.grading.bench_yaml import capability_set, find_bug
+from fbbench.models import CATALOG, PRICES, cost_usd, default_sweep
+from fbbench.paths import REPO
+from fbbench.runner.backends import make_backend
+from fbbench.runner.episode import run_episode
+from fbbench.runner.mcp_client import stage_bug_view
 
 
 def print_models() -> None:
-    from registry import CATALOG, default_sweep
-    from pricing import PRICES
     sweep = set(default_sweep())
     print(f"\n  {len(CATALOG)} supported models "
           "(any other provider id is still runnable via --model)\n")
@@ -72,20 +39,9 @@ def print_models() -> None:
     print()
 
 
-def _read_capability_set(bug_dir: Path) -> list[str]:
-    """Pull capability_set from bench.yaml (single line, no full YAML lib)."""
-    text = (bug_dir / "bench.yaml").read_text()
-    for line in text.splitlines():
-        s = line.split("#", 1)[0].strip()
-        if s.startswith("capability_set:"):
-            v = s.split(":", 1)[1].strip()
-            if v.startswith("[") and v.endswith("]"):
-                return [t.strip().strip('"\'') for t in v[1:-1].split(",") if t.strip()]
-    return []
-
-
 def main() -> int:
-    ap = argparse.ArgumentParser(description="FuzzingBrain Bench runner")
+    ap = argparse.ArgumentParser(prog="python -m fbbench.runner",
+                                 description="FuzzingBrain Bench episode driver")
     ap.add_argument("--bug", help="bug_id (e.g. netsnmp-vacm-parse-npd)")
     ap.add_argument("--model", default="claude-opus-4-7", help="model id (claude*/gpt*/gemini*)")
     ap.add_argument("--max-turns", type=int, default=300,
@@ -98,7 +54,7 @@ def main() -> int:
     ap.add_argument("--server-bin", default=None,
                     help="path to mcp-server binary (default: ./bin/mcp-server)")
     ap.add_argument("--repo-root", default=None,
-                    help="benchmark repo root (default: parent of runner/)")
+                    help="benchmark repo root (default: auto-detected)")
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
     ap.add_argument("--list-models", action="store_true",
                     help="print the supported-model catalog and exit")
@@ -110,7 +66,7 @@ def main() -> int:
     if not args.bug:
         ap.error("--bug is required (or use --list-models)")
 
-    repo_root = Path(args.repo_root or Path(__file__).resolve().parent.parent)
+    repo_root = Path(args.repo_root) if args.repo_root else REPO
     load_dotenv(repo_root)
     server_bin = args.server_bin or str(repo_root / "bin" / "mcp-server")
     if not Path(server_bin).is_file():
@@ -118,7 +74,10 @@ def main() -> int:
         print(f"  go -C {repo_root}/tools/mcp-server build -o {server_bin}", file=sys.stderr)
         return 2
 
-    bug_dir = find_bug_dir(repo_root, args.bug)
+    bug_dir = find_bug(args.bug, repo_root)
+    if bug_dir is None:
+        print(f"error: bug {args.bug} not found under {repo_root}/bugs", file=sys.stderr)
+        return 2
     out_dir = (Path(args.out_dir) if args.out_dir
                else Path(args.output) / args.bug / args.model)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +98,7 @@ def main() -> int:
             server_bin=server_bin,
             max_turns=args.max_turns,
             episode_log=str(out_dir / "episode.jsonl"),
-            capability_set=_read_capability_set(bug_dir),
+            capability_set=capability_set(bug_dir),
             pocs_dir=str(pocs_dir) if pocs_dir else None,
         )
     finally:

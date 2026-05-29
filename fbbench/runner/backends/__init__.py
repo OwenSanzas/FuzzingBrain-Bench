@@ -1,13 +1,9 @@
 """Backend factory: model id -> a provider Backend instance."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from fbbench.models import provider_for
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from registry import provider_for  # noqa: E402
-
-from .base import Backend  # noqa: E402,F401
+from .base import Backend  # noqa: F401
 
 
 def make_backend(model: str, api_key: str | None = None) -> Backend:

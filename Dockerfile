@@ -7,7 +7,7 @@
 #   docker build -t fbbench-runner .
 #   docker run --rm -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
 #       -v $(pwd)/runs:/work/runs fbbench-runner \
-#       --bug netsnmp-vacm-parse-npd --model claude-opus-4-7 --seed 0
+#       --bug netsnmp-vacm-parse-npd --model claude-opus-4-7
 
 FROM golang:1.22-bookworm AS mcp-build
 WORKDIR /src
@@ -22,16 +22,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /work
 
-# Python deps
-COPY runner/requirements.txt /work/runner/requirements.txt
-RUN pip install --no-cache-dir -r runner/requirements.txt
+# The fbbench package + its provider SDKs (editable install reads pyproject).
+COPY pyproject.toml README.md /work/
+COPY fbbench/ /work/fbbench/
+RUN pip install --no-cache-dir -e .
 
 # MCP server binary
 COPY --from=mcp-build /out/mcp-server /work/bin/mcp-server
 
-# Everything else the runner needs: bugs/, runner/, scripts/
-COPY runner/  /work/runner/
-COPY scripts/ /work/scripts/
+# Bug corpus + spec the runner reads at grade time.
 COPY bugs/    /work/bugs/
 COPY docs/SPEC.md docs/bench-corpus.json /work/docs/
 
@@ -46,7 +45,8 @@ RUN useradd -r -u 10001 -s /usr/sbin/nologin agent \
  && find /work/bugs \( -path '*/grader/*' -o -path '*/poc/*' \) -type f -exec chmod 0600 {} +
 
 ENV PYTHONPATH=/work \
+    FBBENCH_REPO=/work \
     BENCH_AGENT_UID=10001 \
     BENCH_AGENT_GID=10001
-ENTRYPOINT ["python", "-m", "runner"]
+ENTRYPOINT ["python", "-m", "fbbench.runner"]
 CMD ["--help"]

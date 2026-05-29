@@ -12,15 +12,14 @@ OpenAI / Google) for the model loop.
 ## Setup
 
 ```bash
-go -C tools/mcp-server build -o ../../bin/mcp-server      # MCP server
-python3 -m venv .venv && .venv/bin/pip install -r runner/requirements.txt
+make setup                                                 # MCP server + venv + pip install -e .
 echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env                 # or OPENAI_/GEMINI_
 ```
 
 ## Run one episode
 
 ```bash
-python -m runner \
+python -m fbbench.runner \
   --bug netsnmp-vacm-parse-npd \
   --model claude-opus-4-7 \
   --max-turns 60 \
@@ -30,7 +29,7 @@ python -m runner \
 Or the legacy nesting (`<output>/<bug>/<model>/`) — used by sweep scripts:
 
 ```bash
-python -m runner --bug X --model Y --output runs/
+python -m fbbench.runner --bug X --model Y --output runs/
 # → runs/X/Y/
 ```
 
@@ -55,10 +54,10 @@ whether it satisfied `K_b`:
 
 ## What the runner does NOT do (v1)
 
-- No multi-process parallelism across bugs (use `scripts/sweep.py` or
-  drive multiple `./fb-bench run` calls with `xargs -P`).
+- No multi-process parallelism across bugs (use `python -m fbbench.sweep.orchestrator`
+  or drive multiple `./fb-bench run` calls with `xargs -P`).
 - No coaching / Stuck-nudges (v2 adaptive arm).
-- No vendor-CLI shim (see the Codex CLI arm in `scripts/sweep_codex.py`).
+- No vendor-CLI shim (see the Codex CLI arm in `python -m fbbench.sweep.codex`).
 - No Docker isolation — the MCP server is a host subprocess. This means
   agent `exec` commands run as the runner's UID. Run on a throwaway VM.
 
@@ -67,6 +66,6 @@ whether it satisfied `K_b`:
 Temperature is fixed at 1.0; the runner has **no `--seed`** because no
 provider's API call currently wires one. Re-running the same `(model,
 bug)` produces independently sampled trajectories. To collect multiple
-samples per cell, use `scripts/sweep.py --samples 0,1,2` — each sample
+samples per cell, use `python -m fbbench.sweep.orchestrator --samples 0,1,2` — each sample
 gets its own directory (`runs/<bug>/<model>/seed-N/`, kept named `seed-N`
 for back-compat with the 518-row legacy dataset).
