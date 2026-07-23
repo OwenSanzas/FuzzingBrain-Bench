@@ -1,6 +1,6 @@
 # FB-Bench sealed challenges — public index
 
-68 answer-free challenge images on Docker Hub. Each names only its
+69 answer-free challenge images on Docker Hub. Each names only its
 project, language, and harness type — never the bug class or location (that
 is what you must discover). Pull anonymously; grading is remote and never
 ships an answer.
@@ -54,28 +54,29 @@ docker pull docker.io/osanzas/fbbench-challenge-<id>:latest
 | 41 | `libwebp-02` | libwebp | cpp | libfuzzer |
 | 42 | `libwebp-03` | libwebp | c | libfuzzer |
 | 43 | `libwebsockets-01` | libwebsockets | c | libfuzzer |
-| 44 | `mongoose-01` | mongoose | c | libfuzzer |
-| 45 | `mongoose-02` | mongoose | c | libfuzzer |
-| 46 | `ndpi-01` | ndpi | c | libfuzzer |
-| 47 | `net-snmp-01` | net-snmp | c | libfuzzer |
-| 48 | `net-snmp-02` | net-snmp | c | libfuzzer |
-| 49 | `opc-ua-01` | open62541 | c | libfuzzer |
-| 50 | `opencv-01` | opencv | cpp | libfuzzer |
-| 51 | `openh264-01` | openh264 | cpp | libfuzzer |
-| 52 | `openldap-01` | openldap | c | libfuzzer |
-| 53 | `openldap-02` | openldap | c | libfuzzer |
-| 54 | `openscreen-01` | openscreen | cpp | libfuzzer |
-| 55 | `openscreen-02` | openscreen | cpp | libfuzzer |
-| 56 | `openssl-01` | openssl | c | libfuzzer |
-| 57 | `ots-01` | ots | cpp | libfuzzer |
-| 58 | `pdfbox-01` | pdfbox | jvm | java |
-| 59 | `pdfbox-02` | pdfbox | jvm | java |
-| 60 | `pdfbox-03` | pdfbox | jvm | java |
-| 61 | `simdutf-01` | simdutf | cpp | libfuzzer |
-| 62 | `skia-01` | skia | cpp | libfuzzer |
-| 63 | `spirv-tools-01` | spirv-tools | cpp | libfuzzer |
-| 64 | `spirv-tools-02` | spirv-tools | cpp | libfuzzer |
-| 65 | `systemd-01` | systemd | c | libfuzzer |
-| 66 | `systemd-02` | systemd | c | libfuzzer |
-| 67 | `upx-01` | upx | cpp | libfuzzer |
-| 68 | `upx-02` | upx | cpp | libfuzzer |
+| 44 | `libxml2-01` | libxml2 | c | libfuzzer |
+| 45 | `mongoose-01` | mongoose | c | libfuzzer |
+| 46 | `mongoose-02` | mongoose | c | libfuzzer |
+| 47 | `ndpi-01` | ndpi | c | libfuzzer |
+| 48 | `net-snmp-01` | net-snmp | c | libfuzzer |
+| 49 | `net-snmp-02` | net-snmp | c | libfuzzer |
+| 50 | `opc-ua-01` | open62541 | c | libfuzzer |
+| 51 | `opencv-01` | opencv | cpp | libfuzzer |
+| 52 | `openh264-01` | openh264 | cpp | libfuzzer |
+| 53 | `openldap-01` | openldap | c | libfuzzer |
+| 54 | `openldap-02` | openldap | c | libfuzzer |
+| 55 | `openscreen-01` | openscreen | cpp | libfuzzer |
+| 56 | `openscreen-02` | openscreen | cpp | libfuzzer |
+| 57 | `openssl-01` | openssl | c | libfuzzer |
+| 58 | `ots-01` | ots | cpp | libfuzzer |
+| 59 | `pdfbox-01` | pdfbox | jvm | java |
+| 60 | `pdfbox-02` | pdfbox | jvm | java |
+| 61 | `pdfbox-03` | pdfbox | jvm | java |
+| 62 | `simdutf-01` | simdutf | cpp | libfuzzer |
+| 63 | `skia-01` | skia | cpp | libfuzzer |
+| 64 | `spirv-tools-01` | spirv-tools | cpp | libfuzzer |
+| 65 | `spirv-tools-02` | spirv-tools | cpp | libfuzzer |
+| 66 | `systemd-01` | systemd | c | libfuzzer |
+| 67 | `systemd-02` | systemd | c | libfuzzer |
+| 68 | `upx-01` | upx | cpp | libfuzzer |
+| 69 | `upx-02` | upx | cpp | libfuzzer |

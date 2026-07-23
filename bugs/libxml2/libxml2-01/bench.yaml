@@ -1,0 +1,19 @@
+bug_id: libxml2-01
+project: libxml2
+image: docker.io/chenzc2001/fbbench-challenge-libxml2-01:latest
+target:
+  language: c
+  build_system: autoconf
+harness:
+  type: libfuzzer
+  entrypoint: LLVMFuzzerTestOneInput
+  invocation:
+  - '@@'
+  rss_limit_mb: 2560
+  timeout_s: 30
+  provenance: oss-fuzz
+  sanitizer: asan
+reproducibility:
+  base_image_digest: ''
+  snapshot_debian_date: 20260101T000000Z
+  source_date_epoch: 1735689600
