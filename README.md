@@ -85,7 +85,7 @@ python -m fbbench.sweep.orchestrator --models claude-haiku-4-5 --bugs all --exp 
 python -m fbbench.sweep.orchestrator --models sweep --bugs all --exp sweep1
 ```
 
-Results land in `runs/<exp>/<bug>/<model>/run-N/` (`score.json`, `episode.jsonl`,
+Results land in `output/<exp>/<bug>/<model>/run-N/` (`score.json`, `episode.jsonl`,
 `transcript.jsonl`, `cost.json`, distilled `traj.md`); a leaderboard is printed
 and re-aggregable with `--report-only --exp <name>`.
 
@@ -155,7 +155,7 @@ fb-bench run <alias> \
     --model gpt-5.5 \
     --full-scan \             # withhold the description (hard mode)
     --max-turns 100 \         # turn budget (default 100 for full-scan; diff-scan uses 50)
-    --exp my-experiment \     # group runs under runs/my-experiment/...
+    --exp my-experiment \     # group runs under output/my-experiment/...
     --no-preserve-pocs \      # graded blobs are KEPT by default; pass this to drop them
     --force-full              # ignore early stops; spend the full budget
 ```

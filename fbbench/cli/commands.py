@@ -357,7 +357,7 @@ def cmd_run(args) -> int:
         else:
             exp = "exp-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             exp_label = "auto-assigned (no --exp given)"
-        base = REPO / "runs" / exp / args.bug_id / model
+        base = REPO / "output" / exp / args.bug_id / model
         base.mkdir(parents=True, exist_ok=True)
         n = 0
         while (base / f"run-{n}").exists():

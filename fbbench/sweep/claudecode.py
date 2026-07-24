@@ -13,7 +13,7 @@ Cheat hardening (audited empirically — see the module docstring notes below):
 Claude Code runs HEADLESS on the host, but EVERY host-side cheat surface is shut
 off, not just forbidden by the prompt:
   - cwd is the bind-mounted ISOLATED workspace (a temp dir), NOT the repo — so
-    the repo's `runs/` (prior winning PoCs) and `bugs/` (the staged answer) are
+    the repo's `output/` (prior winning PoCs) and `bugs/` (the staged answer) are
     not reachable by relative path.
   - ALL built-in tools (Bash/Read/Write/Web*/Task/Skill/SlashCommand/…) are
     disallowed; the ONLY allowed tools are the six `mcp__bench__*` tools. Verified

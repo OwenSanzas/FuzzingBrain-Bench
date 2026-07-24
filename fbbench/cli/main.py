@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="turn budget (default: 100 for full-scan; diff-scan uses 50)")
     sp_run.add_argument("--exp", "-e", default=None,
                         help="experiment namespace (default: auto-assigned exp-<timestamp>); "
-                             "groups runs into runs/<exp>/<bug>/<model>/run-N/")
+                             "groups runs into output/<exp>/<bug>/<model>/run-N/")
     sp_run.add_argument("--output", "-o", default=None,
                         help="literal output dir; overrides --exp")
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,

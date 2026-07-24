@@ -13,7 +13,7 @@ Aligned with the API arm (mirrors ExploitBench's codex setup):
     inside the container.
 The workspace is bind-mounted so candidate inputs survive the (--rm) container;
 they are re-graded through the remote oracle for the authoritative best-cap.
-`sweep` persists runs/<bug>/codex-gpt-5.5/seed-0/{score.json,...} and is resumable.
+`sweep` persists output/<bug>/codex-gpt-5.5/seed-0/{score.json,...} and is resumable.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
 
 MODEL = "codex-gpt-5.5"
-RUNS = REPO / "runs"
+RUNS = REPO / "output"
 FLAGS = ["reach", "crash", "differential", "class", "site"]
 # Grade/submission tool family: the server advertises it as `run_input` and keeps
 # `grade`/`verify_poc` as hidden aliases. Scoring here re-grades workspace blobs

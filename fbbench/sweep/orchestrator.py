@@ -4,7 +4,7 @@
 Runs a (models x bugs x samples) matrix through `python -m fbbench.runner`, one
 episode per subprocess (isolated + per-episode timeout), resumable (skips
 cells whose score.json already exists), with a live cost tally and a final
-leaderboard. Each cell lands at runs/<bug>/<model>/seed-N/ where N is the
+leaderboard. Each cell lands at output/<bug>/<model>/seed-N/ where N is the
 sample index (kept named `seed-N` for back-compat with the legacy 518-row
 dataset; the runner itself has no --seed arg).
 
@@ -19,7 +19,7 @@ Examples:
   # graded blobs (bucketed solved/failed) are kept by default; opt out with --no-preserve-pocs
   python -m fbbench.sweep.orchestrator --models sweep --bugs all --no-preserve-pocs
 
-  # just re-aggregate the leaderboard from existing runs/
+  # just re-aggregate the leaderboard from existing output/
   python -m fbbench.sweep.orchestrator --report-only
 """
 from __future__ import annotations
@@ -171,8 +171,8 @@ def main() -> int:
     ap.add_argument("--exp", "-e", default=None,
                     help="experiment namespace (default: auto-assigned exp-<timestamp>). "
                          "Pass an existing name (e.g. paper-v1) to resume that campaign.")
-    ap.add_argument("--output", default=str(REPO / "runs"),
-                    help="runs root (default: ./runs). Cells land at <output>/<exp>/<bug>/<model>/seed-N/.")
+    ap.add_argument("--output", default=str(REPO / "output"),
+                    help="runs root (default: ./output). Cells land at <output>/<exp>/<bug>/<model>/seed-N/.")
     ap.add_argument("--report-only", action="store_true",
                     help="skip running; just re-aggregate from <output>/<exp>/")
     ap.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
