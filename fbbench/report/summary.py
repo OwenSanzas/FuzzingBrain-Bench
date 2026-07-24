@@ -1,7 +1,7 @@
 """Build a self-contained, answer-free sweep summary page.
 
 After a sweep, :func:`write_summary` injects a params+results blob into
-``summary_template.html`` and writes ``<exp>/index.html`` — a double-clickable
+``summary_template.html`` and writes ``<output>/index.html`` — a double-clickable
 matrix of every (bug x model) cell, each linking to that episode's own report.
 
 ANSWER SAFETY: the summary reads only each cell's ``score.json`` (the agent's

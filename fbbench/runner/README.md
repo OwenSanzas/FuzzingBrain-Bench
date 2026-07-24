@@ -23,14 +23,14 @@ python -m fbbench.runner \
   --bug net-snmp-02 \
   --model claude-opus-4-7 \
   --max-turns 60 \
-  --out-dir runs/my-experiment/
+  --out-dir output/my-experiment/
 ```
 
 Or the legacy nesting (`<output>/<bug>/<model>/`) — used by sweep scripts:
 
 ```bash
-python -m fbbench.runner --bug X --model Y --output runs/
-# → runs/X/Y/
+python -m fbbench.runner --bug X --model Y --output output/
+# → output/X/Y/
 ```
 
 Each run produces:
@@ -67,6 +67,6 @@ Temperature is fixed at 1.0; the runner has **no `--seed`** because no
 provider's API call currently wires one. Re-running the same `(model,
 bug)` produces independently sampled trajectories. To collect multiple
 samples per cell, use `python -m fbbench.sweep.orchestrator --samples 3` (N
-repeats) — each sample gets its own directory (`runs/<bug>/<model>/seed-N/`,
+repeats) — each sample gets its own directory (`output/<bug>/<model>/seed-N/`,
 `N` running 0..samples-1, kept named `seed-N` for back-compat with the
 518-row legacy dataset).

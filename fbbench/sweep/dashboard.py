@@ -227,7 +227,7 @@ class SweepStatus:
             head.append("  ·  ")
             head.append(elapsed, style="cyan")
             sub = Text(no_wrap=True)
-            sub.append(f"exp {self.exp}", style="dim")
+            sub.append(f"out {self.exp}", style="dim")
             sub.append(f"  ·  max_turns {self.max_turns}", style="dim")
             if self.full_scan:
                 sub.append("  ·  full-scan", style="yellow")

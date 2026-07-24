@@ -3,5 +3,7 @@ __pycache__/
 .DS_Store
 *.egg-info/
 .venv/
+output/
 runs/
+.srccache/
 .env

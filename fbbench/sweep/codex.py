@@ -13,7 +13,7 @@ Aligned with the API arm (mirrors ExploitBench's codex setup):
     inside the container.
 The workspace is bind-mounted so candidate inputs survive the (--rm) container;
 they are re-graded through the remote oracle for the authoritative best-cap.
-`sweep` persists runs/<bug>/codex-gpt-5.5/seed-0/{score.json,...} and is resumable.
+`sweep` persists output/<bug>/codex-gpt-5.5/seed-0/{score.json,...} and is resumable.
 """
 from __future__ import annotations
 
@@ -33,12 +33,12 @@ import urllib.request
 from pathlib import Path
 
 from fbbench.grading import DEFAULT_GRADE_URL, capability_set, find_bug, list_bugs
-from fbbench.paths import REPO
+from fbbench.paths import REPO, resolve_output
 from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
 
 MODEL = "codex-gpt-5.5"
-RUNS = REPO / "runs"
+DEFAULT_OUTPUT = REPO / "output"   # default results root when --output is omitted
 FLAGS = ["reach", "crash", "differential", "class", "site"]
 # Grade/submission tool family: the server advertises it as `run_input` and keeps
 # `grade`/`verify_poc` as hidden aliases. Scoring here re-grades workspace blobs
@@ -528,7 +528,7 @@ def cmd_one(args) -> int:
 
     # Persist a report host-side (same pipeline as the sweep arm) and tell the
     # user where it landed — mirrors `fb-bench run`'s results path.
-    cell_dir = RUNS / args.bug_id / MODEL / "one"
+    cell_dir = resolve_output(args.output) / args.bug_id / MODEL / "one"
     cell_dir.mkdir(parents=True, exist_ok=True)
     kb = capability_set(real)
     if best_blob:
@@ -567,8 +567,9 @@ def cmd_one(args) -> int:
 
 
 def run_sweep_cell(bug: str, timeout_s: int,
-                   max_turns: int = MAX_TURNS_DEFAULT) -> dict | None:
-    cell_dir = RUNS / bug / MODEL / "seed-0"
+                   max_turns: int = MAX_TURNS_DEFAULT,
+                   out_root: Path = DEFAULT_OUTPUT) -> dict | None:
+    cell_dir = out_root / bug / MODEL / "seed-0"
     if (cell_dir / "score.json").is_file():
         return None  # already done
     cell_dir.mkdir(parents=True, exist_ok=True)
@@ -631,19 +632,20 @@ def run_sweep_cell(bug: str, timeout_s: int,
 
 
 def cmd_sweep(args) -> int:
+    out_root = resolve_output(args.output)
     bugs = ([n for n, _ in list_bugs()] if args.bugs == "all"
             else [b.strip() for b in args.bugs.split(",") if b.strip()])
-    done = sum(1 for b in bugs if (RUNS / b / MODEL / "seed-0" / "score.json").is_file())
+    done = sum(1 for b in bugs if (out_root / b / MODEL / "seed-0" / "score.json").is_file())
     print(f"  codex sweep: {len(bugs)} bugs ({done} already done, {len(bugs)-done} to run)")
     t0 = time.time()
     solved_total = cheats = 0
     for i, bug in enumerate(bugs, 1):
-        cell = RUNS / bug / MODEL / "seed-0" / "score.json"
+        cell = out_root / bug / MODEL / "seed-0" / "score.json"
         if cell.is_file():
             s = json.loads(cell.read_text())
         else:
             print(f"  [{i}/{len(bugs)}] run  {bug} ...", flush=True)
-            s = run_sweep_cell(bug, args.timeout, args.max_turns)
+            s = run_sweep_cell(bug, args.timeout, args.max_turns, out_root=out_root)
             if not s:
                 continue
         mark = "✓" if s["solved"] else "✗"
@@ -657,7 +659,7 @@ def cmd_sweep(args) -> int:
     print(f"\n  done in {time.time()-t0:.0f}s  solved {solved_total}/{len(bugs)}  web-cheats {cheats}")
     try:
         from fbbench.report.summary import write_summary
-        print(f"  summary -> {write_summary(RUNS)}")
+        print(f"  summary -> {write_summary(out_root)}")
     except Exception as e:  # noqa: BLE001
         print(f"  summary skipped: {e}")
     return 0
@@ -674,6 +676,9 @@ def main(argv=None) -> int:
                         help="turn budget (one mcp_tool_call = one turn)")
     sp_one.add_argument("--timeout", type=int, default=1800,
                         help="wall-clock backstop seconds (anti-hang, not the cap)")
+    sp_one.add_argument("--output", "-o", default=None,
+                        help="results root (default: ./output); bare name nests under it, "
+                             "path used as-is")
     sp_one.set_defaults(fn=cmd_one)
 
     sp_sweep = sub.add_parser("sweep", help="batch all bugs, persist score.json (resumable)")
@@ -682,6 +687,9 @@ def main(argv=None) -> int:
                           help="turn budget per bug (one mcp_tool_call = one turn)")
     sp_sweep.add_argument("--timeout", type=int, default=1800,
                           help="per-bug wall-clock backstop seconds (anti-hang)")
+    sp_sweep.add_argument("--output", "-o", default=None,
+                          help="results root (default: ./output); bare name nests under it, "
+                               "path used as-is. Re-running the same --output resumes it")
     sp_sweep.set_defaults(fn=cmd_sweep)
 
     args = ap.parse_args(argv)

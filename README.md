@@ -78,16 +78,17 @@ Models: `claude-haiku-4-5` · `claude-sonnet-4-6` · `claude-opus-4-7` ·
 ### 3. Run the whole corpus with a model
 
 ```bash
-# one model over all 68 challenges (resumable: rerun with the same --exp to skip done)
-python -m fbbench.sweep.orchestrator --models claude-haiku-4-5 --bugs all --exp run1
+# one model over all 68 challenges (resumable: rerun with the same --output to skip done)
+python -m fbbench.sweep.orchestrator --models claude-haiku-4-5 --bugs all --output run1
 
 # default multi-model lineup, all challenges
-python -m fbbench.sweep.orchestrator --models sweep --bugs all --exp sweep1
+python -m fbbench.sweep.orchestrator --models sweep --bugs all --output sweep1
 ```
 
-Results land in `runs/<exp>/<bug>/<model>/run-N/` (`score.json`, `episode.jsonl`,
+Results land in `output/<name>/<bug>/<model>/seed-N/` (`score.json`, `episode.jsonl`,
 `transcript.jsonl`, `cost.json`, distilled `traj.md`); a leaderboard is printed
-and re-aggregable with `--report-only --exp <name>`.
+and re-aggregable with `--report-only --output <name>`. `--output` takes a bare
+name (nested under `output/`) or a path (used as-is).
 
 ### 4. Agent mode (Codex) — one challenge
 
@@ -155,7 +156,7 @@ fb-bench run <alias> \
     --model gpt-5.5 \
     --full-scan \             # withhold the description (hard mode)
     --max-turns 100 \         # turn budget (default 100 for full-scan; diff-scan uses 50)
-    --exp my-experiment \     # group runs under runs/my-experiment/...
+    --output my-experiment \  # results under output/my-experiment/ (name or path)
     --no-preserve-pocs \      # graded blobs are KEPT by default; pass this to drop them
     --force-full              # ignore early stops; spend the full budget
 ```

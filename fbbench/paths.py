@@ -24,3 +24,29 @@ def find_repo_root() -> Path:
 
 REPO = find_repo_root()
 SERVER = REPO / "bin" / "mcp-server"
+
+
+def resolve_output(value: str | None) -> Path:
+    """Resolve a --output value to a results-root directory.
+
+    One knob controls where results land (there is no separate namespace flag):
+
+      - not given            -> the default ``output/`` root (results accumulate
+                                there and re-runs resume)
+      - a bare name          -> nested under the default root, e.g.
+                                ``paper-v1`` -> ``output/paper-v1`` (a named campaign)
+      - a path               -> used as-is; a value is treated as a path when it
+                                contains a separator, is absolute, is ``.``/``..``,
+                                or starts with ``~`` (e.g. ``/data/x``, ``./x``,
+                                ``output/paper-v1``)
+
+    So ``paper-v1`` and ``output/paper-v1`` resolve to the same place, and a bare
+    name never accidentally lands in the cwd.
+    """
+    default = REPO / "output"
+    if not value:
+        return default
+    if ("/" in value or os.path.isabs(value)
+            or value in (".", "..") or value.startswith("~")):
+        return Path(value).expanduser()
+    return default / value

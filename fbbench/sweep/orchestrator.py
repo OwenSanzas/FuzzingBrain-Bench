@@ -4,7 +4,7 @@
 Runs a (models x bugs x samples) matrix through `python -m fbbench.runner`, one
 episode per subprocess (isolated + per-episode timeout), resumable (skips
 cells whose score.json already exists), with a live cost tally and a final
-leaderboard. Each cell lands at runs/<bug>/<model>/seed-N/ where N is the
+leaderboard. Each cell lands at output/<bug>/<model>/seed-N/ where N is the
 sample index (kept named `seed-N` for back-compat with the legacy 518-row
 dataset; the runner itself has no --seed arg).
 
@@ -19,7 +19,7 @@ Examples:
   # graded blobs (bucketed solved/failed) are kept by default; opt out with --no-preserve-pocs
   python -m fbbench.sweep.orchestrator --models sweep --bugs all --no-preserve-pocs
 
-  # just re-aggregate the leaderboard from existing runs/
+  # just re-aggregate the leaderboard from existing output/
   python -m fbbench.sweep.orchestrator --report-only
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ from pathlib import Path
 
 from fbbench.grading import DEFAULT_KB, capability_set, find_bug, list_bugs
 from fbbench.models import SUPPORTED_MODELS, default_sweep
-from fbbench.paths import REPO
+from fbbench.paths import REPO, resolve_output
 
 RUNNER = [sys.executable, "-m", "fbbench.runner"]
 
@@ -168,13 +168,13 @@ def main() -> int:
     ap.add_argument("--max-turns", type=int, default=100,
                     help="turn budget per episode (default 100 for full-scan; diff-scan uses 50)")
     ap.add_argument("--timeout", type=int, default=1800, help="per-episode seconds")
-    ap.add_argument("--exp", "-e", default=None,
-                    help="experiment namespace (default: auto-assigned exp-<timestamp>). "
-                         "Pass an existing name (e.g. paper-v1) to resume that campaign.")
-    ap.add_argument("--output", default=str(REPO / "runs"),
-                    help="runs root (default: ./runs). Cells land at <output>/<exp>/<bug>/<model>/seed-N/.")
+    ap.add_argument("--output", "-o", default=None,
+                    help="where results land (default: ./output). A bare name nests "
+                         "under it (paper-v1 -> output/paper-v1); a path is used as-is "
+                         "(/data/x, ./x). Cells: <output>/<bug>/<model>/seed-N/. "
+                         "Re-running the same --output resumes it.")
     ap.add_argument("--report-only", action="store_true",
-                    help="skip running; just re-aggregate from <output>/<exp>/")
+                    help="skip running; just re-aggregate from <output>/")
     ap.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
                     help="force the live full-screen dashboard (default: on when stdout is a TTY)")
     ap.add_argument("--no-dashboard", dest="dashboard", action="store_false",
@@ -187,13 +187,8 @@ def main() -> int:
                          "4–6 is usually the sweet spot.")
     args = ap.parse_args()
 
-    if args.exp:
-        exp = args.exp
-    else:
-        import datetime
-        exp = "exp-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        print(f"  no --exp given; auto-assigned: {exp}")
-    out = Path(args.output) / exp
+    out = resolve_output(args.output)
+    print(f"  output: {out}")
     models = resolve_models(args.models)
     bugs = resolve_bugs(args.bugs)
     if args.samples < 1:
@@ -217,7 +212,7 @@ def main() -> int:
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
     console = Console()
     use_dash = args.dashboard if args.dashboard is not None else console.is_terminal
-    STATUS.configure(exp=exp, models=models, bugs=bugs, samples=samples,
+    STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=samples,
                      max_turns=args.max_turns, full_scan=args.full_scan,
                      total=len(cells), already_done=done)
 
@@ -302,7 +297,7 @@ def main() -> int:
     # Self-contained, answer-free summary page for the whole sweep.
     try:
         from fbbench.report import write_summary
-        idx = write_summary(out, exp=exp, models=models, bugs=bugs, samples=samples,
+        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=samples,
                             max_turns=args.max_turns, full_scan=args.full_scan,
                             elapsed_s=elapsed)
         print(f"  summary: {idx}")

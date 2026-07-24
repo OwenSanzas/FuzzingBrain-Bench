@@ -1,7 +1,6 @@
 """The fb-bench subcommands: list, show, grade, grade-all, run, traj, models."""
 from __future__ import annotations
 
-import datetime
 import os
 import subprocess
 import sys
@@ -19,7 +18,7 @@ from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
     route_provider,
 )
-from fbbench.paths import REPO, SERVER
+from fbbench.paths import REPO, SERVER, resolve_output
 
 # Reference PoCs that are slow to grade (long harness / heavy build); skipped
 # by `grade-all` unless --include-slow is passed.
@@ -347,22 +346,16 @@ def cmd_run(args) -> int:
         runner_py = sys.executable
 
     # ---- pick output dir --------------------------------------------------
-    if args.output:
-        out_dir = Path(args.output)
-        exp_label = "(explicit --output)"
-    else:
-        if args.exp:
-            exp = args.exp
-            exp_label = f"--exp {exp}"
-        else:
-            exp = "exp-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-            exp_label = "auto-assigned (no --exp given)"
-        base = REPO / "runs" / exp / args.bug_id / model
-        base.mkdir(parents=True, exist_ok=True)
-        n = 0
-        while (base / f"run-{n}").exists():
-            n += 1
-        out_dir = base / f"run-{n}"
+    # One knob: --output is the results root (default ./output). A bare name
+    # nests under it (paper-v1 -> output/paper-v1); a path is used as-is. Each
+    # run gets its own auto-incrementing run-N under <root>/<bug>/<model>/.
+    root = resolve_output(args.output)
+    base = root / args.bug_id / model
+    base.mkdir(parents=True, exist_ok=True)
+    n = 0
+    while (base / f"run-{n}").exists():
+        n += 1
+    out_dir = base / f"run-{n}"
 
     # ---- invoke runner ----------------------------------------------------
     cmd = [runner_py, "-m", "fbbench.runner",
@@ -385,7 +378,6 @@ def cmd_run(args) -> int:
     print()
     print(bold("  fb-bench run  ") + cyan(args.bug_id) +
           dim(f"  model={model}  max-turns={args.max_turns}"))
-    print(dim(f"  exp:       {exp_label}"))
     print(dim(f"  output:    {out_dir}"))
     print()
     rc = subprocess.call(cmd, cwd=str(REPO), env=env_combined)
