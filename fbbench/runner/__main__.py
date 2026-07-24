@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from fbbench.env import load_dotenv
-from fbbench.grading.bench_yaml import capability_set, find_bug
+from fbbench.grading.bench_yaml import capability_set, find_bug, read_bench
 from fbbench.models import CATALOG, PRICES, cost_usd, default_sweep
 from fbbench.paths import REPO
 from fbbench.runner.backends import make_backend
@@ -106,7 +106,14 @@ def main() -> int:
     # Canonical path (default): the agent runs against the PUBLIC challenge image
     # and grades via the remote oracle baked into it — the same artifact the world
     # runs. `--local` is a dev shortcut whose local grading can diverge.
-    image = None if args.local else f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}"
+    #
+    # A bug may pin its own image via the optional top-level `image:` field in
+    # bench.yaml (a full ref, e.g. docker.io/zhicheng/my-cairo-bug:latest); used
+    # verbatim when set. Otherwise fall back to <image_prefix><alias> under the
+    # canonical namespace.
+    bug_image = read_bench(Path(bug_dir) / "bench.yaml").get("image")
+    image = None if args.local else (bug_image or
+                                     f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}")
     out_dir = (Path(args.out_dir) if args.out_dir
                else Path(args.output) / args.bug / args.model)
     out_dir.mkdir(parents=True, exist_ok=True)
