@@ -52,11 +52,11 @@ def main() -> int:
     ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                     help="save every graded candidate blob into pocs/{solved,failed}/ "
                          "(default on; pass --no-preserve-pocs to disable)")
-    ap.add_argument("--no-stop-on-solve", dest="stop_on_solve",
-                    action="store_false", default=True,
-                    help="do NOT end the episode when the target defect is first "
-                         "reproduced; let the agent keep hunting for more crashes "
-                         "until it stops (ASSESSMENT COMPLETE) or --max-turns")
+    ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=True,
+                    help="end the episode when the target defect is first reproduced "
+                         "(default on; --no-stop-on-solve lets the agent keep hunting "
+                         "for more crashes until it stops (ASSESSMENT COMPLETE) or "
+                         "--max-turns)")
     # The public benchmark is ALWAYS blind (full-scan): the bug description is
     # withheld and the agent must discover a crashing input. Normal (hinted) mode
     # is removed from the public repo — it exists only in the private answers repo.
