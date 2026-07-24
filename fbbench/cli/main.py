@@ -38,11 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="model id (default: auto-pick from provider key in .env)")
     sp_run.add_argument("--max-turns", type=int, default=100,
                         help="turn budget (default: 100 for full-scan; diff-scan uses 50)")
-    sp_run.add_argument("--exp", "-e", default=None,
-                        help="experiment namespace (default: auto-assigned exp-<timestamp>); "
-                             "groups runs into output/<exp>/<bug>/<model>/run-N/")
     sp_run.add_argument("--output", "-o", default=None,
-                        help="literal output dir; overrides --exp")
+                        help="where results land (default: ./output). A bare name nests "
+                             "under it (paper-v1 -> output/paper-v1); a path is used as-is. "
+                             "Each run gets output/<bug>/<model>/run-N/")
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{solved,failed}/ "
                              "(default on; --no-preserve-pocs to disable)")
