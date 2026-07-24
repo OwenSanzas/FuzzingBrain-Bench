@@ -48,8 +48,9 @@ from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
 # Reuse the Codex arm's host-side helpers verbatim so the two arms grade and
 # select PoCs identically (same remote oracle, same blob heuristic).
+from fbbench.paths import resolve_output
 from fbbench.sweep.codex import (
-    FLAGS, GRADE_URL, IMAGE_PREFIX, RUNS,
+    FLAGS, GRADE_URL, IMAGE_PREFIX, DEFAULT_OUTPUT,
     _best_caps, _candidate_blobs, _codex_nudge, _remote_grade,
 )
 
@@ -467,7 +468,7 @@ def cmd_one(args) -> int:
     for b in blobs:
         print(f"  {os.path.basename(b):30s} ({os.path.getsize(b)}b)")
 
-    cell_dir = RUNS / args.bug_id / model_label(args.model) / "one"
+    cell_dir = resolve_output(args.output) / args.bug_id / model_label(args.model) / "one"
     score = _persist(cell_dir, bug=args.bug_id, model=args.model, real=str(real),
                      r=r, blobs=blobs, alias=alias)
     fired = [f for f in FLAGS if score["capabilities"][f] == "fired"]
@@ -480,8 +481,9 @@ def cmd_one(args) -> int:
 
 def run_sweep_cell(bug: str, model: str, timeout_s: int,
                    max_turns: int = MAX_TURNS_DEFAULT, *,
-                   auth: str = "sub", api_key: str | None = None) -> dict | None:
-    cell_dir = RUNS / bug / model_label(model) / "seed-0"
+                   auth: str = "sub", api_key: str | None = None,
+                   out_root=DEFAULT_OUTPUT) -> dict | None:
+    cell_dir = out_root / bug / model_label(model) / "seed-0"
     if (cell_dir / "score.json").is_file():
         return None  # already done
     real = find_bug(bug)
@@ -503,25 +505,26 @@ def run_sweep_cell(bug: str, model: str, timeout_s: int,
 
 
 def cmd_sweep(args) -> int:
+    out_root = resolve_output(args.output)
     label = model_label(args.model)
     api_key = _anthropic_key() if args.auth == "api" else None
     if args.auth == "api" and not api_key:
         sys.exit("  --auth api: no ANTHROPIC_API_KEY in ./.env or environment")
     bugs = ([n for n, _ in list_bugs()] if args.bugs == "all"
             else [b.strip() for b in args.bugs.split(",") if b.strip()])
-    done = sum(1 for b in bugs if (RUNS / b / label / "seed-0" / "score.json").is_file())
+    done = sum(1 for b in bugs if (out_root / b / label / "seed-0" / "score.json").is_file())
     print(f"  claude-code sweep ({label}, auth={args.auth}): {len(bugs)} bugs "
           f"({done} done, {len(bugs)-done} to run)")
     t0 = time.time()
     solved_total = 0
     for i, bug in enumerate(bugs, 1):
-        cell = RUNS / bug / label / "seed-0" / "score.json"
+        cell = out_root / bug / label / "seed-0" / "score.json"
         if cell.is_file():
             s = json.loads(cell.read_text())
         else:
             print(f"  [{i}/{len(bugs)}] run  {bug} ...", flush=True)
             s = run_sweep_cell(bug, args.model, args.timeout, args.max_turns,
-                               auth=args.auth, api_key=api_key)
+                               auth=args.auth, api_key=api_key, out_root=out_root)
             if not s:
                 continue
         mark = "✓" if s["solved"] else "✗"
@@ -533,7 +536,7 @@ def cmd_sweep(args) -> int:
     print(f"\n  done in {time.time()-t0:.0f}s  solved {solved_total}/{len(bugs)}")
     try:
         from fbbench.report.summary import write_summary
-        print(f"  summary -> {write_summary(RUNS)}")
+        print(f"  summary -> {write_summary(out_root)}")
     except Exception as e:  # noqa: BLE001
         print(f"  summary skipped: {e}")
     return 0
@@ -555,6 +558,9 @@ def main(argv=None) -> int:
     sp_one.add_argument("--auth", choices=("sub", "api"), default="sub",
                         help="auth entry: 'sub' = claude.ai OAuth (Max, session-limited), "
                              "'api' = ANTHROPIC_API_KEY from ./.env (pay-as-you-go, no throttle)")
+    sp_one.add_argument("--output", "-o", default=None,
+                        help="results root (default: ./output); bare name nests under it, "
+                             "path used as-is")
     sp_one.set_defaults(fn=cmd_one)
 
     sp_sweep = sub.add_parser("sweep", help="batch all bugs, persist score.json (resumable)")
@@ -568,6 +574,9 @@ def main(argv=None) -> int:
     sp_sweep.add_argument("--auth", choices=("sub", "api"), default="sub",
                           help="auth entry: 'sub' = claude.ai OAuth (Max, session-limited), "
                                "'api' = ANTHROPIC_API_KEY from ./.env (pay-as-you-go, no throttle)")
+    sp_sweep.add_argument("--output", "-o", default=None,
+                          help="results root (default: ./output); bare name nests under it, "
+                               "path used as-is. Re-running the same --output resumes it")
     sp_sweep.set_defaults(fn=cmd_sweep)
 
     args = ap.parse_args(argv)
