@@ -45,10 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{solved,failed}/ "
                              "(default on; --no-preserve-pocs to disable)")
-    sp_run.add_argument("--no-stop-on-solve", dest="stop_on_solve",
-                        action="store_false", default=True,
-                        help="don't end at the first target solve; let the agent "
-                             "keep hunting until it stops or --max-turns")
+    sp_run.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=True,
+                        help="end at the first target solve (default on; "
+                             "--no-stop-on-solve lets the agent keep hunting until "
+                             "it stops or --max-turns)")
     sp_run.add_argument("--full-scan", action="store_true",
                         help="harder mode: withhold the bug description; the agent "
                              "gets only the harness and must find a crashing input")
