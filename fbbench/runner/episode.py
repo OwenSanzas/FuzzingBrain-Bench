@@ -125,6 +125,7 @@ def run_episode(
     capability_set: list[str] | None = None,
     pocs_dir: str | None = None,
     stop_on_solve: bool = True,
+    mode: str = "full-scan",
 ) -> EpisodeResult:
     mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
     mcp.initialize()
@@ -140,9 +141,15 @@ def run_episode(
     # Read the sanitizer from the LOCAL bundle: in the canonical path bug_dir is a
     # container path ("/src"); the host-side bug bundle is oracle_dir.
     backfill_sanitizer(setup_resp, oracle_dir or bug_dir)
-    # setup() no longer ships a task/description field — the task is conveyed by
-    # the system prompt — so no bug description is read here (full-scan is blind).
-    user_text = build_initial_user_message(setup_resp)
+    # The mode selects only the FIRST user turn; the system prompt is the same
+    # (blind) text for every mode. full-scan is the one active public mode;
+    # diffscan (delta-N) is a reserved extension point (see prompts.py).
+    if mode == "full-scan":
+        user_text = build_initial_user_message(setup_resp)
+    elif mode == "diffscan":
+        raise NotImplementedError("diff-scan (delta-N) mode is not implemented")
+    else:
+        raise ValueError(f"unknown mode: {mode!r} (expected full-scan | diffscan)")
     sysp = system_prompt()
 
     messages: list[dict] = [{"role": "user", "content": user_text}]

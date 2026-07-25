@@ -55,9 +55,12 @@ def main() -> int:
                          "(default on; --no-stop-on-solve lets the agent keep hunting "
                          "for more crashes until it stops (ASSESSMENT COMPLETE) or "
                          "--max-turns)")
-    # The benchmark is ALWAYS blind: the bug description is withheld and the agent
-    # must discover a crashing input from the harness + source alone. There is no
-    # other mode.
+    # Context mode. full-scan (blind) is the one active public mode — the bug
+    # description is withheld and the agent finds the crash from the harness +
+    # source alone. diffscan (delta-N) is a reserved extension point, not yet
+    # implemented (see prompts.build_diffscan_message).
+    ap.add_argument("--mode", default="full-scan", choices=("full-scan", "diffscan"),
+                    help="agent context mode (default: full-scan / blind)")
     ap.add_argument("--repo-root", default=None,
                     help="benchmark repo root (default: auto-detected)")
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
@@ -109,6 +112,7 @@ def main() -> int:
         capability_set=capability_set(bug_dir),
         pocs_dir=str(pocs_dir) if pocs_dir else None,
         stop_on_solve=args.stop_on_solve,
+        mode=args.mode,
     )
 
     score = {
@@ -117,7 +121,7 @@ def main() -> int:
         # Every run knob that shaped this episode — surfaced verbatim in the
         # report so a result is fully reproducible from its own score.json.
         "config": {
-            "mode": "blind",
+            "mode": args.mode,
             "max_turns": args.max_turns,
             "stop_on_solve": bool(args.stop_on_solve),
             "preserve_pocs": bool(args.preserve_pocs),
