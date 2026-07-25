@@ -1,7 +1,11 @@
 """Codex-CLI arm: drive `codex exec` over the bench MCP server.
 
-  python -m fbbench.sweep.codex one   <bug_id> [--timeout S]
-  python -m fbbench.sweep.codex sweep [--bugs all|<csv>] [--timeout S]
+Driven through the single unified entry (no standalone CLI):
+  fb-bench run <bugs> --arm codex [--jobs N] [--samples N] [-o NAME]
+
+orchestrator.run_matrix calls run_cell() per (bug x sample) cell, reusing all of
+the matrix machinery (resume / parallel / aggregate / report) that the API arm
+uses. This module only provides the per-cell executor + Codex-specific staging.
 
 Aligned with the API arm (mirrors ExploitBench's codex setup):
   - the bench MCP server IS the public canonical challenge image — Codex spawns
@@ -13,11 +17,11 @@ Aligned with the API arm (mirrors ExploitBench's codex setup):
     inside the container.
 The workspace is bind-mounted so candidate inputs survive the (--rm) container;
 they are re-graded through the remote oracle for the authoritative best-cap.
-`sweep` persists output/<bug>/codex-gpt-5.5/seed-0/{score.json,...} and is resumable.
+Each cell persists output/<bug>/codex-<model>/seed-N/{score.json,...}, resumable.
+The model (default gpt-5.5) is pinned in config.toml per --model.
 """
 from __future__ import annotations
 
-import argparse
 import glob
 import json
 import os
@@ -25,20 +29,28 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import threading
 import time
 import urllib.request
 from pathlib import Path
 
-from fbbench.grading import DEFAULT_GRADE_URL, capability_set, find_bug, list_bugs
-from fbbench.paths import REPO, resolve_output
+from fbbench.grading import DEFAULT_GRADE_URL, capability_set, find_bug
+from fbbench.models import cost_usd
 from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
 
-MODEL = "codex-gpt-5.5"
-DEFAULT_OUTPUT = REPO / "output"   # default results root when --output is omitted
+# The raw codex model id written into config.toml. `--arm codex --model X` picks
+# X; omitted -> this default, preserving the historical gpt-5.5 behaviour.
+MODEL_DEFAULT = "gpt-5.5"
+
+
+def model_label(model: str) -> str:
+    """Cell/report label for a codex model — arm-distinct from the API arm's raw
+    id so `output/<bug>/codex-gpt-5.5/` never collides with the API arm's cells."""
+    return f"codex-{model}"
+
+
 FLAGS = ["reach", "crash", "differential", "class", "site"]
 # Grade/submission tool family: the server advertises it as `run_input` and keeps
 # `grade`/`verify_poc` as hidden aliases. Scoring here re-grades workspace blobs
@@ -68,9 +80,12 @@ _CODEX_CONFIG = """\
 # and the host environment (incl. OPENAI_API_KEY) is NOT leaked into subprocesses.
 # The only way to touch the target is the bench MCP tools, which run inside the
 # challenge container below. Mirrors ExploitBench's codex hardening.
-# Pin the model so the run matches the MODEL label ("codex-gpt-5.5"); without
-# this line codex falls back to its compiled-in default (gpt-5.x-codex).
-model = "gpt-5.5"
+# Pin the model to the one requested (default gpt-5.5). Without a `model =` line
+# codex falls back to its compiled-in default (gpt-5.x-codex), so we always set it.
+model = "{model}"
+# Enforce the resolved login method ("api" = OPENAI_API_KEY / "chatgpt" = ChatGPT
+# sign-in) so codex never silently switches when both credentials are present.
+forced_login_method = "{login}"
 web_search = "disabled"
 
 [features]
@@ -95,7 +110,9 @@ startup_timeout_sec = 60
 """
 
 
-def stage_codex_env(real_bug_dir: str, bug: str) -> tuple[str, str, str]:
+def stage_codex_env(real_bug_dir: str, bug: str,
+                    model: str = MODEL_DEFAULT,
+                    login: str = "api") -> tuple[str, str, str]:
     """Stage CODEX_HOME + a bind-mounted workspace for the canonical challenge image.
 
     The challenge surface (neutral discovery view) and grading (remote oracle) are
@@ -123,7 +140,7 @@ def stage_codex_env(real_bug_dir: str, bug: str) -> tuple[str, str, str]:
     if os.path.exists(auth):
         os.symlink(auth, os.path.join(ch, "auth.json"))
     with open(os.path.join(ch, "config.toml"), "w") as f:
-        f.write(_CODEX_CONFIG.format(image=image, ws=work))
+        f.write(_CODEX_CONFIG.format(image=image, ws=work, model=model, login=login))
     return image, root, work
 
 
@@ -133,7 +150,7 @@ def codex_cmd(work: str, max_turns: int = MAX_TURNS_DEFAULT) -> list[str]:
     The target source lives at /src INSIDE the container and is reached only via
     the MCP tools, so Codex needs no host --add-dir. Codex's own shell/web are
     HARD-OFF in config.toml ([features] shell_tool=false, web_search="disabled");
-    --disable web_search_request and the run_sweep_cell log scan are kept as
+    --disable web_search_request and the run_cell log scan are kept as
     belt-and-suspenders. --dangerously-bypass-approvals-and-sandbox lets Codex
     spawn the bench `docker run` MCP subprocess (the container is the real sandbox).
 
@@ -278,7 +295,7 @@ def _run_codex_once(argv: list[str], env: dict, lf, deadline: float,
 
 
 def run_codex(root: str, work: str, timeout_s: int,
-              max_turns: int = MAX_TURNS_DEFAULT) -> dict:
+              max_turns: int = MAX_TURNS_DEFAULT, api_key: str | None = None) -> dict:
     """Drive `codex exec` to a fixed TURN budget, EB-style (codex_force_300.sh).
 
     A turn = one model API call (one rollout `last_token_usage` record), counted
@@ -293,6 +310,11 @@ def run_codex(root: str, work: str, timeout_s: int,
     """
     env = os.environ.copy()
     env["CODEX_HOME"] = os.path.join(root, "codex_home")
+    # --auth api: make the key available to codex even when it lives only in ./.env
+    # (run_codex spawns the `codex` binary, which does not read our dotenv). Under
+    # --auth sub this is None and codex uses the ChatGPT sign-in in auth.json.
+    if api_key:
+        env["OPENAI_API_KEY"] = api_key
     codex_home = env["CODEX_HOME"]
     log_path = os.path.join(work, "codex.log")
     t0 = time.time()
@@ -351,11 +373,17 @@ def _remote_grade(alias: str, data: bytes) -> dict:
         return json.load(r)
 
 
-def _best_caps(alias: str, blobs: list[str]) -> tuple[dict, str | None, int, bool]:
+def _best_caps(alias: str, blobs: list[str],
+               pocs_dir: str | None = None) -> tuple[dict, str | None, int, bool]:
     """Re-grade each blob through the REMOTE oracle; keep the BEST SINGLE blob
     (never a union across blobs). Returns (caps, blob, tier, solved) where solved
     is the oracle's target_bug_found for that one blob — the authoritative solve,
     consistent with the API arm.
+
+    When `pocs_dir` is given, EVERY graded candidate is also preserved under
+    pocs_dir/{solved,failed}/ with its verdict — the same forensic record the API
+    arm keeps — so no attempt is lost (matches --preserve-pocs). Each blob is
+    graded exactly once regardless.
 
     Grading goes to the same remote oracle the in-run grade() tool hits, so Codex's
     reported caps are consistent with the canonical path — not a local re-grade that
@@ -363,7 +391,8 @@ def _best_caps(alias: str, blobs: list[str]) -> tuple[dict, str | None, int, boo
     """
     best: tuple[dict, str | None, int, bool] = (
         {f: "not_fired" for f in FLAGS}, None, 0, False)
-    for b in blobs:
+    poc_root = Path(pocs_dir) if pocs_dir else None
+    for i, b in enumerate(blobs):
         try:
             resp = _remote_grade(alias, Path(b).read_bytes())
         except Exception:
@@ -371,6 +400,15 @@ def _best_caps(alias: str, blobs: list[str]) -> tuple[dict, str | None, int, boo
         caps = resp.get("capabilities", {})
         target = bool(resp.get("target_bug_found", False))
         ts = sum(1 for f in FLAGS if caps.get(f) == "fired")
+        if poc_root is not None:
+            sub = poc_root / ("solved" if target else "failed")
+            sub.mkdir(parents=True, exist_ok=True)
+            name = f"blob-{i:03d}-{os.path.basename(b)}"
+            shutil.copy(b, sub / name)
+            (sub / (name + ".json")).write_text(json.dumps({
+                "capabilities": caps,
+                "capabilities_bestof": resp.get("capabilities_bestof"),
+                "target_bug_found": target, "tier_score": ts}, indent=2))
         # Prefer a blob that IS the target, then higher tier.
         if (int(target), ts) > (int(best[3]), best[2]):
             best = ({f: caps.get(f, "not_fired") for f in FLAGS}, b, ts, target)
@@ -483,9 +521,10 @@ def _rollout_to_transcript(rollout: str, out_path: Path, *, model: str,
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
-def _codex_cost(rollout: str) -> dict:
-    """A cost.json from the rollout's cumulative token usage (gpt-5.5 pricing,
-    OpenAI cache read 0.1x). total_usd is a diagnostic, not bundled."""
+def _codex_cost(rollout: str, model: str = MODEL_DEFAULT) -> dict:
+    """A cost.json from the rollout's cumulative token usage. Prices via the shared
+    catalog (fbbench.models.cost_usd) so the number follows --model; total_usd is a
+    diagnostic (None if the model is unpriced), not bundled."""
     last = {}
     for raw in open(rollout, errors="ignore"):
         try:
@@ -498,96 +537,42 @@ def _codex_cost(rollout: str) -> dict:
     cached = int(last.get("cached_input_tokens") or 0)
     out = int(last.get("output_tokens") or 0)
     fresh = max(0, inp - cached)
-    usd = fresh * 5e-6 + cached * 0.5e-6 + out * 30e-6
-    return {"model": MODEL, "input_tokens": fresh, "output_tokens": out,
+    breakdown = cost_usd(model, fresh, out, cached, 0)
+    return {"model": model_label(model), "input_tokens": fresh, "output_tokens": out,
             "cache_read_tokens": cached, "cache_write_tokens": 0,
-            "total_usd": round(usd, 4)}
+            "total_usd": breakdown.get("total_usd")}
 
 
-def cmd_one(args) -> int:
-    real = find_bug(args.bug_id)
-    if not real:
-        sys.exit(f"bug not found: {args.bug_id}")
-    alias = _full_scan_alias(str(real))
-    image, root, work = stage_codex_env(str(real), args.bug_id)
-    print(f"IMAGE={image}\nWORK={work}\nLOG={os.path.join(work, 'codex.log')}", flush=True)
-    r = run_codex(root, work, args.timeout, args.max_turns)
-    print(f"\ncodex {r['terminated']} after {r['duration_s']:.0f}s  "
-          f"turns={r['turns']}/{args.max_turns}", flush=True)
+def run_cell(cell_dir: Path, bug: str, timeout_s: int,
+             max_turns: int = MAX_TURNS_DEFAULT, model: str = MODEL_DEFAULT,
+             auth: str = "api", api_key: str | None = None,
+             preserve_pocs: bool = True) -> dict | None:
+    """Run one Codex episode into an explicit cell_dir and write score.json.
 
-    blobs = _candidate_blobs(work)
-    print(f"\n=== {len(blobs)} candidate blob(s) in workspace ===", flush=True)
-    for b in blobs:
-        print(f"  {os.path.basename(b):30s} ({os.path.getsize(b)}b)")
-    caps, best_blob, ts, solved = _best_caps(alias, blobs)
-    if best_blob:
-        fired = [f for f in FLAGS if caps[f] == "fired"]
-        print(f"\nBEST: {os.path.basename(best_blob)}  fired {fired}", flush=True)
-    print(f"\ngrade calls during run: {r['grade_calls']}")
-    print(f"workspace: {work}", flush=True)
-
-    # Persist a report host-side (same pipeline as the sweep arm) and tell the
-    # user where it landed — mirrors `fb-bench run`'s results path.
-    cell_dir = resolve_output(args.output) / args.bug_id / MODEL / "one"
-    cell_dir.mkdir(parents=True, exist_ok=True)
-    kb = capability_set(real)
-    if best_blob:
-        shutil.copy(best_blob, cell_dir / "best_blob")
-    if Path(r["log_path"]).is_file():
-        shutil.copy(r["log_path"], cell_dir / "codex.log")
-    rollout = _rollout_path(os.path.join(root, "codex_home"))
-    cost = {}
-    if rollout:
-        shutil.copy(rollout, cell_dir / "rollout.jsonl")
-        cost = _codex_cost(rollout)
-        (cell_dir / "cost.json").write_text(json.dumps(cost, indent=2))
-    (cell_dir / "score.json").write_text(json.dumps({
-        "bug_id": args.bug_id, "model": MODEL, "seed": 0,
-        "capabilities": caps, "tier_score": ts, "k_b": kb,
-        "solved": solved,
-        "terminated_reason": r["terminated"], "turns_used": r["turns"],
-        "max_turns": args.max_turns, "duration_s": round(r["duration_s"], 1),
-        "grade_calls": r["grade_calls"], "blobs_written": len(blobs),
-        "tokens_used": r["tokens"] or None, "total_usd": cost.get("total_usd"),
-    }, indent=2))
-    if rollout:
-        try:
-            _rollout_to_transcript(str(cell_dir / "rollout.jsonl"),
-                                   cell_dir / "transcript.jsonl",
-                                   model=MODEL, bug_id=args.bug_id, kb=kb)
-            from fbbench.runner.report import write_report
-            write_report(cell_dir)
-        except Exception as e:  # noqa: BLE001
-            print(f"report skipped: {e}")
-    print(f"\nresults saved to: {cell_dir}")
-    for f in ("score.json", "report.html", "transcript.jsonl", "codex.log"):
-        if (cell_dir / f).is_file():
-            print(f"  {f}")
-    return 0
-
-
-def run_sweep_cell(bug: str, timeout_s: int,
-                   max_turns: int = MAX_TURNS_DEFAULT,
-                   out_root: Path = DEFAULT_OUTPUT) -> dict | None:
-    cell_dir = out_root / bug / MODEL / "seed-0"
-    if (cell_dir / "score.json").is_file():
-        return None  # already done
+    The per-cell contract the matrix engine drives for every arm: given a
+    cell_dir, produce score.json (same schema as the API arm). Resume is the
+    caller's job (run_matrix skips a cell whose score.json already exists), so
+    this always runs. `model` is the raw codex model id (config.toml); the score
+    records model_label(model). `auth` is "api" (OPENAI_API_KEY) or "sub"
+    (ChatGPT sign-in), enforced via config.toml's forced_login_method."""
+    cell_dir = Path(cell_dir)
     cell_dir.mkdir(parents=True, exist_ok=True)
     real = find_bug(bug)
     if not real:
-        print(f"  [skip] bug not found: {bug}")
-        return None
+        return {"error": f"bug not found: {bug}"}
 
     alias = _full_scan_alias(str(real))
-    image, root, work = stage_codex_env(str(real), bug)
-    r = run_codex(root, work, timeout_s, max_turns)
+    login = "chatgpt" if auth == "sub" else "api"
+    image, root, work = stage_codex_env(str(real), bug, model, login)
+    r = run_codex(root, work, timeout_s, max_turns, api_key=api_key if auth == "api" else None)
     log_path = r["log_path"]
 
     log_text = Path(log_path).read_text(errors="replace") if Path(log_path).is_file() else ""
     cheated_web = bool(re.search(r"web search:|web_search\b|browser_use|fetch.*http", log_text, re.I))
 
     blobs = _candidate_blobs(work)
-    caps, best_blob, ts, solved = _best_caps(alias, blobs)
+    caps, best_blob, ts, solved = _best_caps(
+        alias, blobs, pocs_dir=str(cell_dir / "pocs") if preserve_pocs else None)
 
     if best_blob:
         shutil.copy(best_blob, cell_dir / "best_blob")
@@ -596,13 +581,13 @@ def run_sweep_cell(bug: str, timeout_s: int,
     cost = {}
     if rollout:
         shutil.copy(rollout, cell_dir / "rollout.jsonl")
-        cost = _codex_cost(rollout)
+        cost = _codex_cost(rollout, model)
         (cell_dir / "cost.json").write_text(json.dumps(cost, indent=2))
     kb = capability_set(real)
     # `solved` is the authoritative target_bug_found from _best_caps — NOT
     # recomputed from caps-all-fired, so it matches the API arm exactly.
     score = {
-        "bug_id": bug, "model": MODEL, "seed": 0,
+        "bug_id": bug, "model": model_label(model), "seed": 0,
         "capabilities": caps, "tier_score": ts,
         "k_b": kb, "solved": solved,
         "terminated_reason": r["terminated"],
@@ -622,7 +607,7 @@ def run_sweep_cell(bug: str, timeout_s: int,
         try:
             _rollout_to_transcript(str(cell_dir / "rollout.jsonl"),
                                    cell_dir / "transcript.jsonl",
-                                   model=MODEL, bug_id=bug, kb=kb)
+                                   model=model_label(model), bug_id=bug, kb=kb)
             from fbbench.runner.report import write_report
             write_report(cell_dir)
         except Exception as e:  # noqa: BLE001
@@ -631,70 +616,14 @@ def run_sweep_cell(bug: str, timeout_s: int,
     return score
 
 
-def cmd_sweep(args) -> int:
-    out_root = resolve_output(args.output)
-    bugs = ([n for n, _ in list_bugs()] if args.bugs == "all"
-            else [b.strip() for b in args.bugs.split(",") if b.strip()])
-    done = sum(1 for b in bugs if (out_root / b / MODEL / "seed-0" / "score.json").is_file())
-    print(f"  codex sweep: {len(bugs)} bugs ({done} already done, {len(bugs)-done} to run)")
-    t0 = time.time()
-    solved_total = cheats = 0
-    for i, bug in enumerate(bugs, 1):
-        cell = out_root / bug / MODEL / "seed-0" / "score.json"
-        if cell.is_file():
-            s = json.loads(cell.read_text())
-        else:
-            print(f"  [{i}/{len(bugs)}] run  {bug} ...", flush=True)
-            s = run_sweep_cell(bug, args.timeout, args.max_turns, out_root=out_root)
-            if not s:
-                continue
-        mark = "✓" if s["solved"] else "✗"
-        cheat = " ⚠CHEAT" if s.get("cheated_web") else ""
-        turns = s.get("turns_used")
-        tstr = f"  turns={turns}/{s.get('max_turns', '?')}" if turns is not None else ""
-        print(f"      {mark} {s['tier_score']}/5  {s['terminated_reason']}{tstr}  "
-              f"{s['duration_s']}s  grades={s['grade_calls']}  blobs={s['blobs_written']}{cheat}")
-        solved_total += int(s["solved"])
-        cheats += int(bool(s.get("cheated_web")))
-    print(f"\n  done in {time.time()-t0:.0f}s  solved {solved_total}/{len(bugs)}  web-cheats {cheats}")
-    try:
-        from fbbench.report.summary import write_summary
-        print(f"  summary -> {write_summary(out_root)}")
-    except Exception as e:  # noqa: BLE001
-        print(f"  summary skipped: {e}")
-    return 0
-
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m fbbench.sweep.codex",
-                                 description="Codex-CLI arm for FuzzingBrain Bench")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    sp_one = sub.add_parser("one", help="run a single bug interactively (keeps workspace)")
-    sp_one.add_argument("bug_id")
-    sp_one.add_argument("--max-turns", type=int, default=MAX_TURNS_DEFAULT,
-                        help="turn budget (one mcp_tool_call = one turn)")
-    sp_one.add_argument("--timeout", type=int, default=1800,
-                        help="wall-clock backstop seconds (anti-hang, not the cap)")
-    sp_one.add_argument("--output", "-o", default=None,
-                        help="results root (default: ./output); bare name nests under it, "
-                             "path used as-is")
-    sp_one.set_defaults(fn=cmd_one)
-
-    sp_sweep = sub.add_parser("sweep", help="batch all bugs, persist score.json (resumable)")
-    sp_sweep.add_argument("--bugs", default="all", help="'all' or comma list")
-    sp_sweep.add_argument("--max-turns", type=int, default=MAX_TURNS_DEFAULT,
-                          help="turn budget per bug (one mcp_tool_call = one turn)")
-    sp_sweep.add_argument("--timeout", type=int, default=1800,
-                          help="per-bug wall-clock backstop seconds (anti-hang)")
-    sp_sweep.add_argument("--output", "-o", default=None,
-                          help="results root (default: ./output); bare name nests under it, "
-                               "path used as-is. Re-running the same --output resumes it")
-    sp_sweep.set_defaults(fn=cmd_sweep)
-
-    args = ap.parse_args(argv)
-    return args.fn(args)
+# The Codex arm has no standalone CLI: it is driven through the single unified
+# entry `fb-bench run <bugs> --arm codex`, which calls run_cell() per matrix cell
+# (resume / parallel / aggregate / report all reused from orchestrator.run_matrix).
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Redirect the old `python -m fbbench.sweep.codex ...` entry to the unified
+    # CLI instead of silently doing nothing.
+    import sys
+    sys.exit("the Codex arm has no standalone CLI.\n"
+             "use:  fb-bench run <bugs> --arm codex   (e.g. fb-bench run avro-03 --arm codex)")

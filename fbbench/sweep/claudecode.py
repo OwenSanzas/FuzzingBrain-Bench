@@ -1,7 +1,10 @@
 """Claude-Code-CLI arm: drive headless `claude -p` over the bench MCP server.
 
-  python -m fbbench.sweep.claudecode one   <bug_id> [--model sonnet] [--max-turns N]
-  python -m fbbench.sweep.claudecode sweep [--bugs all|<csv>] [--model sonnet]
+Driven through the single unified entry (no standalone CLI):
+  fb-bench run <bugs> --arm claudecode [--model sonnet] [--auth sub|api] [-o NAME]
+
+orchestrator.run_matrix calls run_cell() per (bug x sample) cell, reusing the
+same matrix machinery (resume / parallel / aggregate / report) as every arm.
 
 The sibling of the Codex arm (fbbench/sweep/codex.py). It reuses the SAME bench
 MCP server (the public canonical challenge image: `docker run -i --rm <image>
@@ -30,27 +33,24 @@ Claude-specific regression.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 
-from fbbench.grading import capability_set, find_bug, list_bugs
+from fbbench.grading import capability_set, find_bug
 from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
 # Reuse the Codex arm's host-side helpers verbatim so the two arms grade and
 # select PoCs identically (same remote oracle, same blob heuristic).
-from fbbench.paths import resolve_output
 from fbbench.sweep.codex import (
-    FLAGS, GRADE_URL, IMAGE_PREFIX, DEFAULT_OUTPUT,
-    _best_caps, _candidate_blobs, _codex_nudge, _remote_grade,
+    IMAGE_PREFIX,
+    _best_caps, _candidate_blobs, _codex_nudge,
 )
 
 MAX_TURNS_DEFAULT = 100
@@ -205,6 +205,8 @@ def _run_claude_once(argv: list[str], lf, deadline: float,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1, start_new_session=True, env=env)
     st = {"turns": 0, "grade_calls": 0, "tokens": 0, "usd": 0.0,
+          "input_tokens": 0, "output_tokens": 0,
+          "cache_read_tokens": 0, "cache_write_tokens": 0,
           "session_id": None, "ended": "exited"}
     msg_ids: set = set()
     grade_ids: set = set()
@@ -245,7 +247,13 @@ def _run_claude_once(argv: list[str], lf, deadline: float,
         elif t == "result":
             st["session_id"] = ev.get("session_id") or st["session_id"]
             u = ev.get("usage") or {}
-            st["tokens"] += int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0))
+            it = int(u.get("input_tokens", 0))
+            ot = int(u.get("output_tokens", 0))
+            st["input_tokens"] += it
+            st["output_tokens"] += ot
+            st["cache_read_tokens"] += int(u.get("cache_read_input_tokens", 0))
+            st["cache_write_tokens"] += int(u.get("cache_creation_input_tokens", 0))
+            st["tokens"] += it + ot
             st["usd"] += float(ev.get("total_cost_usd") or 0.0)
     try:
         proc.wait(timeout=10)
@@ -282,6 +290,7 @@ def run_claude(work: str, mcp_cfg: str, model: str, timeout_s: int,
     t0 = time.time()
     deadline = t0 + timeout_s
     turns = grade_calls = tokens = 0
+    in_tok = out_tok = cr_tok = cw_tok = 0
     usd = 0.0
     session_id = None
     last_grade_turn = 0
@@ -300,6 +309,10 @@ def run_claude(work: str, mcp_cfg: str, model: str, timeout_s: int,
             turns += st["turns"]
             grade_calls += st["grade_calls"]
             tokens += st["tokens"]
+            in_tok += st["input_tokens"]
+            out_tok += st["output_tokens"]
+            cr_tok += st["cache_read_tokens"]
+            cw_tok += st["cache_write_tokens"]
             usd += st["usd"]
             if st["grade_calls"]:
                 last_grade_turn = turns
@@ -322,7 +335,9 @@ def run_claude(work: str, mcp_cfg: str, model: str, timeout_s: int,
 
     return {"terminated": terminated, "duration_s": time.time() - t0,
             "log_path": log_path, "turns": turns, "grade_calls": grade_calls,
-            "tokens": tokens, "total_usd": round(usd, 4)}
+            "tokens": tokens, "input_tokens": in_tok, "output_tokens": out_tok,
+            "cache_read_tokens": cr_tok, "cache_write_tokens": cw_tok,
+            "total_usd": round(usd, 4)}
 
 
 def _stream_to_transcript(log_path: str, out_path: Path, *, model: str,
@@ -417,10 +432,13 @@ def _stream_to_transcript(log_path: str, out_path: Path, *, model: str,
 
 
 def _persist(cell_dir: Path, *, bug: str, model: str, real: str,
-             r: dict, blobs: list[str], alias: str) -> dict:
-    """Re-grade blobs through the remote oracle, write score.json + report."""
+             r: dict, blobs: list[str], alias: str, preserve_pocs: bool = True) -> dict:
+    """Re-grade blobs through the remote oracle, write score.json + report.
+    With preserve_pocs, every graded candidate is kept under pocs/{solved,failed}/
+    (same forensic record as the API arm)."""
     cell_dir.mkdir(parents=True, exist_ok=True)
-    caps, best_blob, ts, solved = _best_caps(alias, blobs)
+    caps, best_blob, ts, solved = _best_caps(
+        alias, blobs, pocs_dir=str(cell_dir / "pocs") if preserve_pocs else None)
     if best_blob:
         shutil.copy(best_blob, cell_dir / "best_blob")
     if Path(r["log_path"]).is_file():
@@ -437,6 +455,19 @@ def _persist(cell_dir: Path, *, bug: str, model: str, real: str,
         "tokens_used": r["tokens"] or None, "total_usd": r["total_usd"],
     }
     (cell_dir / "score.json").write_text(json.dumps(score, indent=2))
+    # cost.json, aligned with the api/codex arms. total_usd is Claude Code's OWN
+    # reported cost (total_cost_usd), not derived from our catalog, so it is the
+    # authoritative number; the token breakdown comes from its usage events.
+    cost = {
+        "model": model_label(model),
+        "input_tokens": r.get("input_tokens", 0),
+        "output_tokens": r.get("output_tokens", 0),
+        "cache_read_tokens": r.get("cache_read_tokens", 0),
+        "cache_write_tokens": r.get("cache_write_tokens", 0),
+        "pricing_source": "claude-code",
+        "total_usd": r["total_usd"],
+    }
+    (cell_dir / "cost.json").write_text(json.dumps(cost, indent=2))
     try:
         _stream_to_transcript(r["log_path"], cell_dir / "transcript.jsonl",
                               model=model_label(model), bug_id=bug, kb=kb)
@@ -447,48 +478,18 @@ def _persist(cell_dir: Path, *, bug: str, model: str, real: str,
     return score
 
 
-def cmd_one(args) -> int:
-    real = find_bug(args.bug_id)
-    if not real:
-        sys.exit(f"bug not found: {args.bug_id}")
-    alias = _full_scan_alias(str(real))
-    image, _root, work, mcp_cfg = stage_claude_env(str(real), args.model)
-    print(f"IMAGE={image}\nWORK={work}\nLOG={os.path.join(work, 'claude.log')}", flush=True)
-    api_key = _anthropic_key() if args.auth == "api" else None
-    r = run_claude(work, mcp_cfg, args.model, args.timeout, args.max_turns,
-                   auth=args.auth, api_key=api_key)
-    r["max_turns"] = args.max_turns
-    print(f"\nclaude {r['terminated']} after {r['duration_s']:.0f}s  "
-          f"turns={r['turns']}/{args.max_turns}  grades={r['grade_calls']}  "
-          f"${r['total_usd']}", flush=True)
+def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
+             max_turns: int = MAX_TURNS_DEFAULT, *,
+             auth: str = "sub", api_key: str | None = None,
+             preserve_pocs: bool = True) -> dict | None:
+    """Run one Claude-Code episode into an explicit cell_dir and write score.json.
 
-    blobs = _candidate_blobs(work)
-    print(f"\n=== {len(blobs)} candidate blob(s) in workspace ===", flush=True)
-    for b in blobs:
-        print(f"  {os.path.basename(b):30s} ({os.path.getsize(b)}b)")
-
-    cell_dir = resolve_output(args.output) / args.bug_id / model_label(args.model) / "one"
-    score = _persist(cell_dir, bug=args.bug_id, model=args.model, real=str(real),
-                     r=r, blobs=blobs, alias=alias)
-    fired = [f for f in FLAGS if score["capabilities"][f] == "fired"]
-    print(f"\nBEST fired {fired}  (tier {score['tier_score']}/5, "
-          f"solved={score['solved']})")
-    print(f"results saved to: {cell_dir}")
-    print(f"workspace kept at: {work}")
-    return 0
-
-
-def run_sweep_cell(bug: str, model: str, timeout_s: int,
-                   max_turns: int = MAX_TURNS_DEFAULT, *,
-                   auth: str = "sub", api_key: str | None = None,
-                   out_root=DEFAULT_OUTPUT) -> dict | None:
-    cell_dir = out_root / bug / model_label(model) / "seed-0"
-    if (cell_dir / "score.json").is_file():
-        return None  # already done
+    The per-cell contract the matrix engine drives for every arm; resume is the
+    caller's job (run_matrix skips a cell whose score.json already exists)."""
+    cell_dir = Path(cell_dir)
     real = find_bug(bug)
     if not real:
-        print(f"  [skip] bug not found: {bug}")
-        return None
+        return {"error": f"bug not found: {bug}"}
     alias = _full_scan_alias(str(real))
     _image, root, work, mcp_cfg = stage_claude_env(str(real), model)
     try:
@@ -497,90 +498,21 @@ def run_sweep_cell(bug: str, model: str, timeout_s: int,
         r["max_turns"] = max_turns
         blobs = _candidate_blobs(work)
         score = _persist(cell_dir, bug=bug, model=model, real=str(real),
-                         r=r, blobs=blobs, alias=alias)
+                         r=r, blobs=blobs, alias=alias, preserve_pocs=preserve_pocs)
     finally:
         shutil.rmtree(root, ignore_errors=True)
     return score
 
 
-def cmd_sweep(args) -> int:
-    out_root = resolve_output(args.output)
-    label = model_label(args.model)
-    api_key = _anthropic_key() if args.auth == "api" else None
-    if args.auth == "api" and not api_key:
-        sys.exit("  --auth api: no ANTHROPIC_API_KEY in ./.env or environment")
-    bugs = ([n for n, _ in list_bugs()] if args.bugs == "all"
-            else [b.strip() for b in args.bugs.split(",") if b.strip()])
-    done = sum(1 for b in bugs if (out_root / b / label / "seed-0" / "score.json").is_file())
-    print(f"  claude-code sweep ({label}, auth={args.auth}): {len(bugs)} bugs "
-          f"({done} done, {len(bugs)-done} to run)")
-    t0 = time.time()
-    solved_total = 0
-    for i, bug in enumerate(bugs, 1):
-        cell = out_root / bug / label / "seed-0" / "score.json"
-        if cell.is_file():
-            s = json.loads(cell.read_text())
-        else:
-            print(f"  [{i}/{len(bugs)}] run  {bug} ...", flush=True)
-            s = run_sweep_cell(bug, args.model, args.timeout, args.max_turns,
-                               auth=args.auth, api_key=api_key, out_root=out_root)
-            if not s:
-                continue
-        mark = "✓" if s["solved"] else "✗"
-        print(f"      {mark} {s['tier_score']}/5  {s['terminated_reason']}  "
-              f"turns={s.get('turns_used')}/{s.get('max_turns', '?')}  "
-              f"{s['duration_s']}s  grades={s['grade_calls']}  "
-              f"blobs={s['blobs_written']}  ${s.get('total_usd')}")
-        solved_total += int(s["solved"])
-    print(f"\n  done in {time.time()-t0:.0f}s  solved {solved_total}/{len(bugs)}")
-    try:
-        from fbbench.report.summary import write_summary
-        print(f"  summary -> {write_summary(out_root)}")
-    except Exception as e:  # noqa: BLE001
-        print(f"  summary skipped: {e}")
-    return 0
-
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m fbbench.sweep.claudecode",
-                                 description="Claude-Code-CLI arm for FuzzingBrain Bench")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    sp_one = sub.add_parser("one", help="run a single bug (keeps workspace)")
-    sp_one.add_argument("bug_id")
-    sp_one.add_argument("--model", default=MODEL_DEFAULT,
-                        help="claude model alias (sonnet/opus/haiku) or full id")
-    sp_one.add_argument("--max-turns", type=int, default=MAX_TURNS_DEFAULT,
-                        help="turn budget (one assistant message = one turn)")
-    sp_one.add_argument("--timeout", type=int, default=1800,
-                        help="wall-clock backstop seconds (anti-hang, not the cap)")
-    sp_one.add_argument("--auth", choices=("sub", "api"), default="sub",
-                        help="auth entry: 'sub' = claude.ai OAuth (Max, session-limited), "
-                             "'api' = ANTHROPIC_API_KEY from ./.env (pay-as-you-go, no throttle)")
-    sp_one.add_argument("--output", "-o", default=None,
-                        help="results root (default: ./output); bare name nests under it, "
-                             "path used as-is")
-    sp_one.set_defaults(fn=cmd_one)
-
-    sp_sweep = sub.add_parser("sweep", help="batch all bugs, persist score.json (resumable)")
-    sp_sweep.add_argument("--bugs", default="all", help="'all' or comma list")
-    sp_sweep.add_argument("--model", default=MODEL_DEFAULT,
-                          help="claude model alias (sonnet/opus/haiku) or full id")
-    sp_sweep.add_argument("--max-turns", type=int, default=MAX_TURNS_DEFAULT,
-                          help="turn budget per bug (one assistant message = one turn)")
-    sp_sweep.add_argument("--timeout", type=int, default=1800,
-                          help="per-bug wall-clock backstop seconds (anti-hang)")
-    sp_sweep.add_argument("--auth", choices=("sub", "api"), default="sub",
-                          help="auth entry: 'sub' = claude.ai OAuth (Max, session-limited), "
-                               "'api' = ANTHROPIC_API_KEY from ./.env (pay-as-you-go, no throttle)")
-    sp_sweep.add_argument("--output", "-o", default=None,
-                          help="results root (default: ./output); bare name nests under it, "
-                               "path used as-is. Re-running the same --output resumes it")
-    sp_sweep.set_defaults(fn=cmd_sweep)
-
-    args = ap.parse_args(argv)
-    return args.fn(args)
+# The Claude-Code arm has no standalone CLI: it is driven through the single
+# unified entry `fb-bench run <bugs> --arm claudecode [--auth sub|api]`, which
+# calls run_cell() per matrix cell (resume / parallel / aggregate / report all
+# reused from orchestrator.run_matrix).
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Redirect the old `python -m fbbench.sweep.claudecode ...` entry to the
+    # unified CLI instead of silently doing nothing.
+    import sys
+    sys.exit("the Claude-Code arm has no standalone CLI.\n"
+             "use:  fb-bench run <bugs> --arm claudecode [--model sonnet] [--auth sub|api]")

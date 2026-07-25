@@ -158,10 +158,21 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                jobs: int = 1, dashboard_pref: bool | None = None,
                preserve_pocs: bool = True, stop_on_solve: bool = True,
                api_key: str | None = None, image_prefix: str | None = None,
-               report_only: bool = False, runner: list[str] | None = None) -> int:
+               report_only: bool = False, runner: list[str] | None = None,
+               arm: str = "api", auth: str = "sub",
+               model_map: dict[str, str] | None = None) -> int:
     """THE engine: run the (models x bugs x samples) matrix. One code path for
     both a single cell (len 1) and a full sweep (len N) — a single run is just a
-    matrix of size one. `fb-bench run` and the module __main__ both call this."""
+    matrix of size one. `fb-bench run` (every arm) calls this.
+
+    `arm` selects the per-cell executor, all sharing the SAME matrix machinery
+    (resume / parallel / aggregate / report):
+      * api        — drive a provider model via `python -m fbbench.runner`
+      * codex      — drive OpenAI's codex CLI (fbbench.sweep.codex.run_cell)
+      * claudecode — drive the Claude Code CLI (fbbench.sweep.claudecode.run_cell)
+    `model_map` maps a cell label back to the raw model id an arm needs (the API
+    arm uses labels verbatim; claudecode labels differ from the raw claude id).
+    """
     if samples < 1:
         raise ValueError("samples must be >= 1 (a repeat count, not a seed index)")
     out = resolve_output(output)
@@ -182,11 +193,34 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
     console = Console()
-    use_dash = dashboard_pref if dashboard_pref is not None else console.is_terminal
+    # The live dashboard tails the API runner's episode.jsonl; the vendor-CLI
+    # arms don't produce that live stream, so only the API arm gets the dashboard.
+    _dash_pref = dashboard_pref if dashboard_pref is not None else console.is_terminal
+    use_dash = (arm == "api") and _dash_pref
+    if arm != "api" and _dash_pref:
+        # A non-blocking heads-up: the run proceeds with line-by-line logs, and
+        # the full transcript + report.html are still written per cell.
+        print(f"  note: the live dashboard is not available for --arm {arm} yet — "
+              f"using line-by-line logs (per-cell transcript + report are still produced).",
+              flush=True)
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
                      max_turns=max_turns, total=len(cells), already_done=done)
 
     def _cell(model, bug, sample):
+        # Per-cell dispatch by arm — every arm writes score.json into the SAME
+        # cell dir, so resume / aggregate / report downstream are arm-agnostic.
+        if arm == "codex":
+            from fbbench.sweep import codex
+            raw = (model_map or {}).get(model, model)
+            return codex.run_cell(cell_dir(out, bug, model, sample), bug, timeout,
+                                  max_turns, model=raw, auth=auth, api_key=api_key,
+                                  preserve_pocs=preserve_pocs)
+        if arm == "claudecode":
+            from fbbench.sweep import claudecode
+            raw = (model_map or {}).get(model, model)
+            return claudecode.run_cell(cell_dir(out, bug, model, sample), bug, raw,
+                                       timeout, max_turns, auth=auth, api_key=api_key,
+                                       preserve_pocs=preserve_pocs)
         return run_cell(model, bug, sample, max_turns, out, timeout,
                         preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
                         api_key=api_key, image_prefix=image_prefix, runner=runner)

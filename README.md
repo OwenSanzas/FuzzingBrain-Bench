@@ -54,6 +54,10 @@ fb-bench models                               # supported models + which keys ar
 host (calling your model API), and grades candidates against the remote oracle.
 Only Docker + your model key are required — no build, no answer key.
 
+> The default `--arm api` needs nothing beyond the above. The `--arm codex` and
+> `--arm claudecode` backends need extra **vendor CLIs — optional**, installed
+> separately (never part of `pip install -e .`); see [§4](#4-agent-modes--same-run-pick-the-backend-with---arm).
+
 ### 2. Run one challenge with a model
 
 ```bash
@@ -101,31 +105,50 @@ fb-bench run all --model claude-haiku-4-5 --output run1 --report-only
 (nested under `output/`) or a path (used as-is), and re-running the same
 `--output` resumes it.
 
-### 4. Agent mode (Codex) — one challenge
+### 4. Agent modes — same `run`, pick the backend with `--arm`
 
-The Codex arm drives OpenAI's `codex exec` CLI over the same bench MCP server.
-
-**One-time codex setup** — the arm must authenticate with an **API key**, not a
-ChatGPT login (a ChatGPT account can't use the `gpt-5.*-codex` models and the run
-fails with `model is not supported when using Codex with a ChatGPT account`):
+The three agent backends share **one entry**. `--arm` selects which one drives
+the challenge; everything else (`<bugs>`, `--jobs`, `--samples`, `--output`,
+resume, the leaderboard) is identical across arms.
 
 ```bash
-npm install -g @openai/codex          # install the codex CLI (needs Node)
-codex logout                          # drop any ChatGPT login
-printenv OPENAI_API_KEY | codex login --with-api-key   # authenticate with your API key
-codex login status                    # should say "API key", not "ChatGPT account"
+fb-bench run avro-03 --model gpt-5.5            # --arm api (default): provider model
+fb-bench run avro-03 --arm codex               # OpenAI codex CLI (default gpt-5.5)
+fb-bench run avro-03 --arm claudecode --model sonnet --auth sub   # Claude Code CLI
+fb-bench run all     --arm codex --jobs 4      # whole corpus, batched, resumable
 ```
 
-Then run a single challenge:
+- **`--arm codex`** drives OpenAI's `codex exec` over the bench MCP server.
+  `--model` sets the codex model (default `gpt-5.5`), pinned via its config.toml.
+- **`--arm claudecode`** drives the Claude Code CLI. `--model` picks the claude
+  model (`sonnet`/`opus`/`haiku`).
+
+Both vendor arms take **`--auth {api,sub}`**: `api` = the provider API key
+(`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, pay-go, no throttle), `sub` = a
+subscription sign-in (codex: a ChatGPT **Plus/Pro/Business/Edu/Enterprise** plan;
+claudecode: claude.ai OAuth). Default is **auto** — prefer `api` when the API key
+is present, else fall back to `sub`.
+
+#### Optional — install the vendor CLI for the arm you use
+
+These are **optional extras** and are **not** installed by `pip install -e .`.
+The default `--arm api` never needs them. Install only the CLI whose arm you plan
+to run (both need Node):
 
 ```bash
-python -m fbbench.sweep.codex one avro-03
-```
+# --arm codex → OpenAI Codex CLI. Authenticate once, matching the --auth you use:
+npm install -g @openai/codex
+#   --auth api (default when OPENAI_API_KEY is set):
+printenv OPENAI_API_KEY | codex login --with-api-key
+#   --auth sub (needs a ChatGPT Plus/Pro/Business/Edu/Enterprise plan; a free
+#   ChatGPT account can't use the codex models):
+codex login                                  # sign in with your ChatGPT plan
 
-### 5. Agent mode (Codex) — whole corpus
-
-```bash
-python -m fbbench.sweep.codex sweep --bugs all          # batched, resumable
+# --arm claudecode → Claude Code CLI.
+npm install -g @anthropic-ai/claude-code
+#   --auth api (default when ANTHROPIC_API_KEY is set): nothing to do
+#   --auth sub: one-time claude.ai OAuth login
+claude
 ```
 
 ---

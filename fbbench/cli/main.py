@@ -33,10 +33,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp_run.add_argument("bugs", metavar="bugs",
                         help="which challenge(s): a single alias (avro-03), a comma "
                              "list (avro-03,jq-01), or 'all'")
+    sp_run.add_argument("--arm", choices=("api", "codex", "claudecode"), default="api",
+                        help="which agent backend drives the challenge (default: api). "
+                             "'api' = a provider model via its API; 'codex' = OpenAI's "
+                             "codex CLI; 'claudecode' = the Claude Code CLI")
     sp_run.add_argument("--model", default=None,
                         help="which model(s): one id, a comma list, 'default-lineup' "
                              "(the curated cross-model roster), or 'all'. Default: "
-                             "auto-pick from the provider key in .env")
+                             "auto-pick from the provider key in .env. "
+                             "For --arm codex it sets the codex model (default gpt-5.5); "
+                             "for --arm claudecode it picks the claude model")
+    sp_run.add_argument("--auth", choices=("api", "sub"), default=None,
+                        help="[--arm codex/claudecode] which credential the vendor CLI "
+                             "uses: 'api' = the provider API key (pay-go, no throttle), "
+                             "'sub' = subscription sign-in (codex: ChatGPT plan; "
+                             "claudecode: claude.ai OAuth). Default: auto — prefer api "
+                             "when the API key is present, else fall back to sub")
     sp_run.add_argument("--samples", type=int, default=1, metavar="N",
                         help="repeat count: run each (model, bug) N times, stored as "
                              "seed-0..seed-(N-1) (default 1). Same --output resumes it")
