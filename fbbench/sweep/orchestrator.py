@@ -1,30 +1,15 @@
-#!/usr/bin/env python3
-"""Batch orchestrator for FuzzingBrain Bench.
+"""The run engine behind `fb-bench run`.
 
-Runs a (models x bugs x samples) matrix through `python -m fbbench.runner`, one
-episode per subprocess (isolated + per-episode timeout), resumable (skips
-cells whose score.json already exists), with a live cost tally and a final
-leaderboard. Each cell lands at output/<bug>/<model>/seed-N/ where N is the
-sample index (kept named `seed-N` for back-compat with the legacy 518-row
-dataset; the runner itself has no --seed arg).
-
-Examples:
-  # cost probe: opus on 5 bugs, 1 sample
-  python -m fbbench.sweep.orchestrator --models claude-opus-4-7 \\
-      --bugs mongoose-01,net-snmp-02,json-java-01,simdutf-01,openldap-02
-
-  # full sweep, default lineup, 2 samples per (model, bug) for best-of-2 union
-  python -m fbbench.sweep.orchestrator --models sweep --bugs all --samples 2
-
-  # graded blobs (bucketed solved/failed) are kept by default; opt out with --no-preserve-pocs
-  python -m fbbench.sweep.orchestrator --models sweep --bugs all --no-preserve-pocs
-
-  # just re-aggregate the leaderboard from existing output/
-  python -m fbbench.sweep.orchestrator --report-only
+`run_matrix()` runs a (models x bugs x samples) matrix through
+`python -m fbbench.runner`, one episode per subprocess (isolated + per-episode
+timeout), resumable (skips cells whose score.json already exists), with a live
+cost tally and a final leaderboard. A single run is just a size-1 matrix, so
+`fb-bench run` (single or many) is the only front door — there is no separate
+CLI here. Each cell lands at output/<bug>/<model>/seed-N/ where N is the sample
+index (kept named `seed-N` for back-compat with the legacy 518-row dataset).
 """
 from __future__ import annotations
 
-import argparse
 import json
 import subprocess
 import sys
@@ -289,32 +274,3 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     except Exception as e:  # noqa: BLE001
         print(f"  (summary generation skipped: {e})")
     return 0
-
-
-def main() -> int:
-    """Deprecated direct entry — `fb-bench run` is the front door. Kept as a thin
-    wrapper over run_matrix() for back-compat."""
-    ap = argparse.ArgumentParser(description="FuzzingBrain Bench batch sweep "
-                                             "(use `fb-bench run` instead)")
-    ap.add_argument("--models", default="claude-opus-4-7")
-    ap.add_argument("--bugs", default="all")
-    ap.add_argument("--samples", type=int, default=1, metavar="N")
-    ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True)
-    ap.add_argument("--full-scan", action="store_true", default=True, help=argparse.SUPPRESS)
-    ap.add_argument("--max-turns", type=int, default=100)
-    ap.add_argument("--timeout", type=int, default=1800)
-    ap.add_argument("--output", "-o", default=None)
-    ap.add_argument("--report-only", action="store_true")
-    ap.add_argument("--dashboard", dest="dashboard", action="store_true", default=None)
-    ap.add_argument("--no-dashboard", dest="dashboard", action="store_false")
-    ap.add_argument("--jobs", "-j", type=int, default=1)
-    args = ap.parse_args()
-    return run_matrix(resolve_models(args.models), resolve_bugs(args.bugs),
-                      samples=args.samples, output=args.output, max_turns=args.max_turns,
-                      timeout=args.timeout, jobs=args.jobs, dashboard_pref=args.dashboard,
-                      preserve_pocs=args.preserve_pocs, full_scan=args.full_scan,
-                      report_only=args.report_only)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
