@@ -43,7 +43,9 @@ def discover_bugs() -> list[str]:
 
 
 def resolve_models(spec: str) -> list[str]:
-    if spec == "sweep":
+    # 'default-lineup' = the curated cross-model roster (see models.default_sweep).
+    # 'sweep' kept as a silent back-compat alias for the old flag value.
+    if spec in ("default-lineup", "sweep"):
         return default_sweep()
     if spec == "all":
         return SUPPORTED_MODELS

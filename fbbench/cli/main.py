@@ -37,9 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="which challenge(s): a single alias (avro-03), a comma "
                              "list (avro-03,jq-01), or 'all'")
     sp_run.add_argument("--model", default=None,
-                        help="which model(s): one id, a comma list, 'sweep' (default "
-                             "lineup), or 'all'. Default: auto-pick from the provider "
-                             "key in .env")
+                        help="which model(s): one id, a comma list, 'default-lineup' "
+                             "(the curated cross-model roster), or 'all'. Default: "
+                             "auto-pick from the provider key in .env")
     sp_run.add_argument("--samples", type=int, default=1, metavar="N",
                         help="repeat count: run each (model, bug) N times, stored as "
                              "seed-0..seed-(N-1) (default 1). Same --output resumes it")
