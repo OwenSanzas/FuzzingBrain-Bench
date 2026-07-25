@@ -70,7 +70,7 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
 
     m = None
     try:
-        m = MCPClient(server_bin="", bug_dir="", workspace="", image=image)
+        m = MCPClient(bug_dir="", workspace="", image=image)
         ok("initialize", bool(m.initialize()))
         s = m.call("setup", {})
         ok("setup_workspace", s.get("workspace_path") == "/workspace", repr(s.get("workspace_path")))

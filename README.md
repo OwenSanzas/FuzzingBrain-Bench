@@ -139,9 +139,9 @@ How much context the agent is handed defines the difficulty:
 | **blind** (default) | harness + source only — **no description**; find the crash cold | 100 | public images |
 | **delta-0 … delta-3** | additionally the crash-region file, mixed with **0/1/2/3** distractor files | **50** | private eval harness |
 
-The public benchmark is **always blind** (`--full-scan`, on by default): the bug
-description is withheld and the agent must find a crashing input from the harness
-and source alone. The `delta-N` levels are the **research evaluation protocol**:
+The public benchmark is **always blind**: the bug description is withheld and the
+agent must find a crashing input from the harness and source alone (there is no
+other public mode). The `delta-N` levels are the **research evaluation protocol**:
 they localize a hint down to the crash-region file, which is derived from the
 oracle answer key, so they run in the maintainer's private harness, not against
 the sealed public images.

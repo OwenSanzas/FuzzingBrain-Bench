@@ -138,7 +138,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":
 // --- header tags + stats ---
 const tags = [];
 tags.push(`${D.models.length} models`, `${D.bugs.length} bugs`, `${D.samples.length} sample(s)`,
-          `max_turns ${D.max_turns}`, D.full_scan ? "full-scan" : "described");
+          `max_turns ${D.max_turns}`);
 document.getElementById("tags").innerHTML = tags.map(t => `<span class="tag">${esc(t)}</span>`).join("");
 document.getElementById("exp").textContent = D.exp;
 
@@ -165,7 +165,7 @@ document.getElementById("stats").innerHTML =
 const C = D.config || {};
 const yn = v => v === null || v === undefined ? "—" : (v === "mixed" ? "mixed" : (v ? "yes" : "no"));
 const cfgRows = [
-  ["mode", C.mode ?? (D.full_scan ? "full-scan" : "normal")],
+  ["mode", C.mode ?? "full-scan"],
   ["models", D.models.join(", ")],
   ["challenges", `${D.bugs.length} bugs`],
   ["samples / cell", D.samples.length],

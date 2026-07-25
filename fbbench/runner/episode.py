@@ -25,7 +25,7 @@ _REFUSAL_STOPS = {"refusal", "content_filter", "safety", "prohibited_content",
                   "blocklist", "recitation", "image_safety"}
 
 # The submission/grading tool. The server advertises it as `run_input` and keeps
-# `grade`/`verify_poc` as hidden aliases (tools/mcp-server/main.go), so the model
+# `grade`/`verify_poc` as hidden aliases (in the oracle's mcp-server), so the model
 # only ever calls `run_input`. Scoring MUST match the same family, or a correct
 # solve submitted via the advertised name is silently scored 0 (and, under
 # reveal, the oracle verdict leaks back to the model instead of harness_output).

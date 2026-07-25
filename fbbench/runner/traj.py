@@ -57,7 +57,7 @@ def _grade_out(result: dict) -> tuple[str, bool]:
     stdout = ho.get("stdout") or ""
     stderr = ho.get("stderr") or ""
     m = _CRASH_RE.search(stderr)
-    # Mirror the oracle's crashFired guard (tools/mcp-server/grade.go): a bare
+    # Mirror the oracle's crashFired guard (in the remote grading server): a bare
     # terminating signal with NO output is the kernel-6.17 ASan startup flake,
     # not an input-triggered crash — so it must NOT be marked as a fault here,
     # or the trajectory's 💥 would contradict a not_fired score.

@@ -75,9 +75,9 @@ export ANTHROPIC_API_KEY=sk-ant-...        # or OPENAI_API_KEY / GEMINI_API_KEY
 #  -> writes runs/<exp>/<bug>/<model>/run-N/{score.json,episode.jsonl,traj.md}
 ```
 
-Requirements for the canonical path: **Docker + a Python venv** (`make setup`, one-time)
-and a provider API key. No Go toolchain and no host `mcp-server` are needed — those are
-only for `--local` (dev shortcut, grades against a local oracle and can diverge).
+Requirements for the canonical path: **Docker + Python (>= 3.10)** and a provider
+API key. No Go toolchain and no host mcp-server are needed — the mcp-server is
+baked into the challenge image and grading is a call to the remote oracle.
 
 ## Verify
 
