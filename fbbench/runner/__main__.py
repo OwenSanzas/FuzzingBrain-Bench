@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 from fbbench.env import load_dotenv
@@ -19,7 +17,7 @@ from fbbench.models import CATALOG, PRICES, cost_usd, default_sweep
 from fbbench.paths import REPO
 from fbbench.runner.backends import make_backend
 from fbbench.runner.episode import run_episode
-from fbbench.runner.mcp_client import stage_bug_view, _full_scan_alias
+from fbbench.runner.mcp_client import _full_scan_alias
 
 
 def print_models() -> None:
@@ -63,21 +61,9 @@ def main() -> int:
     # `--full-scan` is kept as an accepted no-op (callers/orchestrator pass it).
     ap.add_argument("--full-scan", action="store_true", default=True,
                     help=argparse.SUPPRESS)
-    ap.add_argument("--server-bin", default=None,
-                    help="path to mcp-server binary (default: ./bin/mcp-server)")
     ap.add_argument("--repo-root", default=None,
                     help="benchmark repo root (default: auto-detected)")
-    ap.add_argument("--oracle-dir", default=None,
-                    help="override the oracle bug dir (grader + ground-truth binaries) while "
-                         "keeping the agent-facing source view from the real bundle. Used by the "
-                         "off-target ablation to swap in an interference-free oracle binary (Arm B). "
-                         "The source view is identical, so the swap is invisible to the agent.")
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
-    ap.add_argument("--local", action="store_true",
-                    help="DEV ONLY: drive a host mcp-server graded against the local "
-                         "oracle. The default (canonical) path drives the PUBLIC challenge "
-                         "image + remote oracle — identical to what any external user runs, "
-                         "so reported scores are reproducible. Local grading can diverge.")
     ap.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
                     help="registry prefix for the canonical challenge images")
     ap.add_argument("--list-models", action="store_true",
@@ -92,71 +78,42 @@ def main() -> int:
 
     repo_root = Path(args.repo_root) if args.repo_root else REPO
     load_dotenv(repo_root)
-    server_bin = args.server_bin or str(repo_root / "bin" / "mcp-server")
-    if args.local and not Path(server_bin).is_file():
-        print(f"error: mcp-server binary not found at {server_bin}; build with:", file=sys.stderr)
-        print(f"  go -C {repo_root}/tools/mcp-server build -o {server_bin}", file=sys.stderr)
-        return 2
 
     bug_dir = find_bug(args.bug, repo_root)
     if bug_dir is None:
         print(f"error: bug {args.bug} not found under {repo_root}/bugs", file=sys.stderr)
         return 2
 
-    # Canonical path (default): the agent runs against the PUBLIC challenge image
-    # and grades via the remote oracle baked into it — the same artifact the world
-    # runs. `--local` is a dev shortcut whose local grading can diverge.
-    #
-    # A bug may pin its own image via the optional top-level `image:` field in
-    # bench.yaml (a full ref, e.g. docker.io/zhicheng/my-cairo-bug:latest); used
-    # verbatim when set. Otherwise fall back to <image_prefix><alias> under the
-    # canonical namespace.
+    # The agent runs against the PUBLIC challenge image and grades via the remote
+    # oracle baked into it — the same artifact the world runs. A bug may pin its
+    # own image via the optional top-level `image:` field in bench.yaml (a full
+    # ref, e.g. docker.io/zhicheng/my-bug:latest); otherwise fall back to
+    # <image_prefix><alias> under the canonical namespace.
     bug_image = read_bench(Path(bug_dir) / "bench.yaml").get("image")
-    image = None if args.local else (bug_image or
-                                     f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}")
+    image = bug_image or f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}"
     out_dir = (Path(args.out_dir) if args.out_dir
                else Path(args.output) / args.bug / args.model)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # The agent sees workspace_path via setup(). In full-scan the descriptive
-    # bug id names the fault (e.g. "...-nonobject-oob"), so the workspace must NOT
-    # be named after it there — keep it neutral. Normal mode reveals the bug in
-    # the description anyway, so a bug-named dir is fine (and aids debugging).
-    ws_prefix = "fbbench-fullscan-" if args.full_scan else f"fbbench-{args.bug}-"
     backend = make_backend(args.model, api_key=args.api_key)
     pocs_dir = (out_dir / "pocs") if args.preserve_pocs else None
-    if image:
-        # Canonical: everything (challenge surface, workspace, remote grading) is
-        # inside the image. The host stages nothing.
-        workspace, bug_view = None, None
-        ep_bug_dir = "/src"
-    else:
-        workspace = tempfile.mkdtemp(prefix=ws_prefix)
-        # Agent sees a staged sandbox (no grader/, poc/, binaries/); the grader
-        # reads the answer key + ground-truth binaries from the real bug dir.
-        bug_view = stage_bug_view(str(bug_dir), full_scan=args.full_scan)
-        ep_bug_dir = bug_view
-    try:
-        result = run_episode(
-            backend=backend,
-            bug_id=args.bug,
-            bug_dir=ep_bug_dir,
-            oracle_dir=(args.oracle_dir or str(bug_dir)),
-            workspace=workspace or "",
-            server_bin=server_bin,
-            image=image,
-            max_turns=args.max_turns,
-            episode_log=str(out_dir / "episode.jsonl"),
-            capability_set=capability_set(bug_dir),
-            pocs_dir=str(pocs_dir) if pocs_dir else None,
-            stop_on_solve=args.stop_on_solve,
-            full_scan=args.full_scan,
-        )
-    finally:
-        if workspace:
-            shutil.rmtree(workspace, ignore_errors=True)
-        if bug_view:
-            shutil.rmtree(bug_view, ignore_errors=True)
+    # Everything (challenge surface, workspace, remote grading) lives in the
+    # image; the host stages nothing. bug_dir="/src" is the in-container view.
+    ep_bug_dir = "/src"
+    result = run_episode(
+        backend=backend,
+        bug_id=args.bug,
+        bug_dir=ep_bug_dir,
+        oracle_dir=str(bug_dir),
+        workspace="",
+        image=image,
+        max_turns=args.max_turns,
+        episode_log=str(out_dir / "episode.jsonl"),
+        capability_set=capability_set(bug_dir),
+        pocs_dir=str(pocs_dir) if pocs_dir else None,
+        stop_on_solve=args.stop_on_solve,
+        full_scan=args.full_scan,
+    )
 
     score = {
         "bug_id": result.bug_id,
@@ -169,8 +126,8 @@ def main() -> int:
             "full_scan": bool(args.full_scan),
             "stop_on_solve": bool(args.stop_on_solve),
             "preserve_pocs": bool(args.preserve_pocs),
-            "grading": "local-oracle" if args.local else "remote-oracle",
-            "image": image or "(host mcp-server, --local)",
+            "grading": "remote-oracle",
+            "image": image,
             "capability_set": sorted(capability_set(bug_dir) or []),
         },
         "solved": result.solved,

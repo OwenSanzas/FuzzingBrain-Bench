@@ -118,7 +118,7 @@ def run_episode(
     bug_id: str,
     bug_dir: str,
     workspace: str,
-    server_bin: str,
+    image: str,
     max_turns: int = 300,
     episode_log: str | None = None,
     oracle_dir: str | None = None,
@@ -126,10 +126,8 @@ def run_episode(
     pocs_dir: str | None = None,
     stop_on_solve: bool = True,
     full_scan: bool = False,
-    image: str | None = None,
 ) -> EpisodeResult:
-    mcp = MCPClient(server_bin, bug_dir=bug_dir, workspace=workspace,
-                    oracle_dir=oracle_dir, image=image)
+    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
     mcp.initialize()
     kb: set[str] = set(capability_set or DEFAULT_KB)
     poc_root: Path | None = Path(pocs_dir) if pocs_dir else None

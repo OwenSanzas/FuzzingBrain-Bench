@@ -1,78 +1,50 @@
-"""Drive the MCP server's grade() oracle on a single blob — no agent, no LLM.
+"""Grade a single blob against the remote oracle — no agent, no LLM, no Docker.
 
 This is the vendor-neutral grading entry point: feed it bytes from any source
-(AFL++, libFuzzer, hand-crafted, an LLM episode) and it runs the official
-sanitizer-instrumented harness through the same three-round oracle the agent
-sees. Consolidates the duplicate subprocess plumbing that fb-bench grade and
-the regression smoke test each used to carry.
+(AFL++, libFuzzer, hand-crafted) and it POSTs them to the remote grading oracle,
+which runs the official sanitizer-instrumented harness and returns the verdict.
+Just an HTTP request — the answer key never leaves the oracle.
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
-import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
-
-from fbbench.paths import SERVER
 
 FLAGS = ["reach", "crash", "differential", "class", "site"]
 
 # Single source of truth for the remote grading oracle. Developers switch the
-# endpoint HERE; every caller references this constant (env BENCH_GRADE_URL
-# still overrides at runtime for private/staging oracles).
+# endpoint HERE; env BENCH_GRADE_URL still overrides at runtime for staging.
 DEFAULT_GRADE_URL = "https://nonretinal-arletha-arduous.ngrok-free.dev"
 
 
-def grade_blob(bug_dir: Path, blob: Path, rounds: int = 3,
-               server_bin: Path = SERVER, timeout: int = 300) -> tuple[dict, float]:
-    """Grade `blob` against `bug_dir`'s oracle.
+def grade_blob(bug_dir: Path, blob: Path, rounds: int = 1,
+               timeout: int = 300) -> tuple[dict, float]:
+    """POST `blob` to the remote oracle for `bug_dir`'s challenge.
 
-    Returns (structuredContent, elapsed_s) where structuredContent is the
-    grade() result: {capabilities, agreed, rounds, evidence, ...}.
+    Returns (verdict, elapsed_s) where verdict is the oracle's JSON:
+    {capabilities, capabilities_bestof, target_bug_found, agreed, evidence, ...}.
+    The bug id is the challenge alias (the bug dir's own name) unless BENCH_BUG_ID
+    overrides it; the oracle holds the answer key and rounds config server-side.
     """
-    ws = Path(tempfile.mkdtemp(prefix=f"fb-{Path(bug_dir).name}-"))
+    bug_id = os.environ.get("BENCH_BUG_ID") or Path(bug_dir).name
+    grade_url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
+    data = Path(blob).read_bytes()
+    req = urllib.request.Request(
+        f"{grade_url}/grade?bug={bug_id}", data=data, method="POST",
+        headers={"Content-Type": "application/octet-stream",
+                 # Skip ngrok's browser interstitial so the JSON comes back clean.
+                 "ngrok-skip-browser-warning": "true"})
+    t0 = time.time()
     try:
-        shutil.copy(blob, ws / "input.bin")
-        req = {
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "grade", "arguments": {
-                "path": str(ws / "input.bin"),
-                "options": {"round_count": rounds},
-            }},
-        }
-        env = os.environ.copy()
-        env["BENCH_BUG_DIR"] = str(Path(bug_dir).resolve())
-        env["BENCH_WORKSPACE"] = str(ws)
-        # The oracle endpoint is internal infrastructure, not a user knob: default
-        # it here so host grading reaches the remote oracle without the caller ever
-        # setting BENCH_GRADE_URL. An explicit env value still wins (staging/private).
-        env.setdefault("BENCH_GRADE_URL", DEFAULT_GRADE_URL)
-        # grade_blob is the trusted, out-of-loop human grader: it must see the
-        # verdict to score/display it. Force reveal (not setdefault) so a stray
-        # BENCH_GRADE_REVEAL=0 in the caller's shell can't seal it into an
-        # unscoreable harness_output-only result.
-        env["BENCH_GRADE_REVEAL"] = "1"
-        t0 = time.time()
-        p = subprocess.run([str(server_bin)],
-                           input=(json.dumps(req) + "\n").encode(),
-                           capture_output=True, env=env, timeout=timeout)
-        elapsed = time.time() - t0
-        lines = p.stdout.decode().strip().splitlines()
-        if not lines:
-            stderr = p.stderr.decode().strip().splitlines()
-            tail = stderr[-1] if stderr else "(no output)"
-            raise RuntimeError(f"grade oracle produced no response: {tail}")
-        out = json.loads(lines[-1])
-        # The server reports failures as a JSON-RPC error object, not a `result`.
-        # Surface its real message (e.g. "BENCH_BUG_ID must be set for remote
-        # grading") instead of letting `out["result"]` blow up as KeyError('result').
-        if "error" in out:
-            err = out["error"] or {}
-            msg = err.get("data") or err.get("message") or err
-            raise RuntimeError(f"grade oracle error: {msg}")
-        return out["result"]["structuredContent"], elapsed
-    finally:
-        shutil.rmtree(ws, ignore_errors=True)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            out = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:300]
+        raise RuntimeError(f"grade oracle status {e.code}: {body}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"grade oracle unreachable ({grade_url}): {e.reason}") from None
+    return out, time.time() - t0

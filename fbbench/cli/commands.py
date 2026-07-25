@@ -18,16 +18,7 @@ from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
     route_provider,
 )
-from fbbench.paths import REPO, SERVER
-
-# Reference PoCs that are slow to grade (long harness / heavy build); skipped
-# by `grade-all` unless --include-slow is passed.
-SLOW_BUGS = {
-    "openssl-01",
-    "imagemagick-02",
-    "jq-01",
-    "icu-02",
-}
+from fbbench.paths import REPO
 
 
 def _require_bug(bug_id: str) -> Path:
@@ -76,51 +67,23 @@ def cmd_show(args) -> int:
 
 
 def cmd_grade(args) -> int:
-    if not SERVER.exists():
-        sys.exit(red(f"error: {SERVER} not present. run `make mcp-server`"))
+    # No LLM, no Docker: POST the blob to the remote oracle and print the verdict.
     bd = _require_bug(args.bug_id)
-    blob = Path(args.blob) if args.blob else bd / "poc" / "poc.bin"
+    if not args.blob:
+        sys.exit(red("  grade needs a blob: ./fb-bench grade <bug> <input-file>"))
+    blob = Path(args.blob)
     if not blob.is_file():
         sys.exit(red(f"error: blob not found: {blob}"))
 
-    # Preflight: host grading here goes through the remote oracle (this repo
-    # ships no local answer key). List each missing env var on its own line
-    # with what it is and an example value, then a ready-to-copy command —
-    # instead of failing deep inside the oracle.
-    # BENCH_GRADE_URL and BENCH_GRADE_REVEAL are internal infrastructure
-    # (defaulted/forced inside grade_blob), not user knobs — deliberately absent
-    # here so we never advertise them. BENCH_BUG_ID is the only thing the user
-    # supplies (which challenge the remote oracle grades against).
-    required = (
-        ("BENCH_BUG_ID", "which challenge to grade", args.bug_id),
-    )
-    missing = [(v, desc, ex) for v, desc, ex in required if not os.environ.get(v)]
-    if missing:
-        lines = [red("  grade needs these env vars (this repo has no local oracle):"), ""]
-        width = max(len(v) for v, _, _ in missing)
-        for v, desc, ex in missing:
-            lines.append(f"    {cyan(v.ljust(width))}  {desc:<30s} {dim('e.g. ' + ex)}")
-        blob_ex = args.blob or "<blob>"
-        cmd_parts = [f"{v}={os.environ.get(v) or ex}" for v, _, ex in required]
-        cmd = f"{' '.join(cmd_parts)} ./fb-bench grade {args.bug_id} {blob_ex}"
-        lines += ["", "  example:", dim(f"    {cmd}")]
-        sys.exit("\n".join(lines))
-
     K_b = capability_set(bd)
-    is_self = args.blob is None
-    label = dim("(self-test, bug's own poc.bin)") if is_self else cyan(str(blob))
-
     print()
     print(bold("  fb-bench grade  ") + cyan(args.bug_id))
-    print(f"  {'blob:':<10s} {label}  {dim(f'({blob.stat().st_size} bytes)')}")
-    print(f"  {'rounds:':<10s} {args.rounds}")
+    print(f"  {'blob:':<10s} {cyan(str(blob))}  {dim(f'({blob.stat().st_size} bytes)')}")
     print(f"  {'K_b:':<10s} {','.join(K_b)}")
-    print(dim(f"  running {args.rounds} randomized rounds (~timeout 30s each)…"))
+    print(dim("  POSTing to the remote oracle…"))
 
     try:
-        r, elapsed = grade_blob(bd, blob, args.rounds)
-    except subprocess.TimeoutExpired:
-        sys.exit(red("  grade timed out (300s)"))
+        r, elapsed = grade_blob(bd, blob)
     except Exception as e:
         sys.exit(red(f"  grade failed: {e}"))
 
@@ -188,69 +151,6 @@ def cmd_grade(args) -> int:
           f"{dim(f'agreed={agreed}, {elapsed:.1f}s')}")
     print()
     return 0 if kb_ok else 1
-
-
-def cmd_grade_all(args) -> int:
-    if not SERVER.exists():
-        sys.exit(red(f"error: {SERVER} not present. run `make mcp-server`"))
-    bugs = list_bugs()
-    if not args.include_slow:
-        skipped = sorted(b for b, _ in bugs if b in SLOW_BUGS)
-        bugs = [(b, d) for b, d in bugs if b not in SLOW_BUGS]
-    else:
-        skipped = []
-
-    print()
-    print(bold(f"  fb-bench grade-all  — {len(bugs)} bugs"))
-    if skipped:
-        print(dim(f"  skipping {len(skipped)} slow bugs (use --include-slow): {', '.join(skipped)}"))
-    print()
-    print(f"  {dim('verdict'):<7s}  {'bug':<38s}  fired                             elapsed")
-    print(dim(f"  {'-'*7}  {'-'*38}  {'-'*32}  -------"))
-
-    rows: list[tuple[str, str]] = []
-    total_t0 = time.time()
-    for bug_id, bd in bugs:
-        K_b = capability_set(bd)
-        blob = bd / "poc" / "poc.bin"
-        if not blob.is_file():
-            print(f"  {yellow('SKIP'):<7s}  {bug_id:<38s}  {dim('no poc.bin')}")
-            rows.append((bug_id, "SKIP"))
-            continue
-        try:
-            r, elapsed = grade_blob(bd, blob, args.rounds)
-            caps = r["capabilities"]
-            if "target_bug_found" in r:
-                kb_ok = bool(r["target_bug_found"])
-            else:
-                kb_ok = all(caps.get(c) == "fired" for c in K_b) and r.get("agreed", False)
-            verdict = "PASS" if kb_ok else "FAIL"
-        except Exception:
-            verdict, caps, elapsed = "ERR", {}, 0.0
-
-        glyphs = " ".join(
-            fmt_status(caps.get(f, "n/a"), f in K_b)[0] + dim(t)
-            for f, t in TIERS
-        )
-        verdict_col = green(verdict) if verdict == "PASS" else red(verdict)
-        print(f"  {verdict_col}    {bug_id:<38s}  {glyphs}     {elapsed:5.1f}s")
-        rows.append((bug_id, verdict))
-
-    n_pass = sum(1 for _, v in rows if v == "PASS")
-    n_fail = sum(1 for _, v in rows if v == "FAIL")
-    n_err = sum(1 for _, v in rows if v == "ERR")
-    n_skip = sum(1 for _, v in rows if v == "SKIP")
-    total = time.time() - total_t0
-
-    print()
-    print(bold("  summary:"))
-    print(f"    {green('PASS'):<6s} {n_pass:>3d}")
-    if n_fail: print(f"    {red('FAIL'):<6s} {n_fail:>3d}")
-    if n_err:  print(f"    {red('ERR'):<6s}  {n_err:>3d}")
-    if n_skip: print(f"    {yellow('SKIP'):<6s} {n_skip:>3d}")
-    print(f"    {dim('total'):<6s} {total:>3.0f}s")
-    print()
-    return 0 if (n_fail == 0 and n_err == 0) else 1
 
 
 def cmd_models(_args) -> int:

@@ -469,55 +469,31 @@ def stage_bug_view(real_bug_dir: str, full_scan: bool = False) -> str:
 
 
 class MCPClient:
-    def __init__(self, server_bin: str, bug_dir: str, workspace: str,
-                 oracle_dir: str | None = None, image: str | None = None):
+    def __init__(self, bug_dir: str, workspace: str, *, image: str):
+        # Drive the PUBLIC challenge image's own mcp-server over stdio. The
+        # challenge surface + BENCH_* (incl. the remote BENCH_GRADE_URL) are baked
+        # into the image, so what we measure is byte-identical to what any external
+        # user runs. The container is ephemeral (--rm) and self-contained.
+        #
+        # seccomp=unconfined lets the in-container mcp-server create the user+network
+        # namespace exec() isolation needs (default Docker seccomp blocks
+        # unshare(CLONE_NEWUSER)). exec'd children still get `-n` (no network — they
+        # cannot brute-force the remote oracle); the server's own grade() call keeps
+        # the container's network. The container is ephemeral and answer-free, so
+        # this leaks nothing. BENCH_GRADE_REVEAL=1 marks the TRUSTED runner: the
+        # in-image mcp-server returns the verdict so the runner can score, then
+        # strips it before the model sees the grade result. --cidfile lets us
+        # `docker cp` grade candidates out of the live container.
         env = os.environ.copy()
         self._image = image
-        self._cidfile: str | None = None
-        self._cid_dir: str | None = None
-        if image:
-            # Canonical path: drive the PUBLIC challenge image's own mcp-server
-            # over stdio. The challenge surface + BENCH_* (incl. the remote
-            # BENCH_GRADE_URL) are baked into the image, so what we measure here
-            # is byte-identical to what any external user runs — no local-vs-Docker
-            # divergence. The container is ephemeral (--rm) and self-contained.
-            #
-            # seccomp=unconfined lets the in-container mcp-server create the
-            # user+network namespace that exec() isolation needs (the default
-            # Docker seccomp profile blocks unshare(CLONE_NEWUSER)). Without it,
-            # exec() would be REFUSED inside the container and the agent couldn't
-            # compile/run test inputs. With it, exec'd children still get `-n`
-            # (no network — they cannot brute-force the remote oracle), while the
-            # server's own grade() call keeps the container's network. The
-            # container is ephemeral and answer-free, so this relaxation leaks
-            # nothing. (--security-opt is a `docker run` flag — must precede the
-            # image name.)
-            # BENCH_GRADE_REVEAL=1 marks this as the TRUSTED runner: the in-image
-            # mcp-server returns the verdict (capabilities/evidence) so the runner
-            # can score, then strips it before the model sees the grade result.
-            # Codex / sealed images do NOT set it, so grade() returns only
-            # harness_output there (no verdict leak to the agent).
-            # --cidfile lets us `docker cp` grade candidates out of the live
-            # container (the agent's inputs live in the container's /workspace,
-            # unreachable by a host-side path check). docker requires the file to
-            # not pre-exist, so we hand it a fresh path inside a temp dir.
-            self._cid_dir = tempfile.mkdtemp(prefix="fbcid-")
-            self._cidfile = os.path.join(self._cid_dir, "cid")
-            cmd = ["docker", "run", "-i", "--rm",
-                   "--cidfile", self._cidfile,
-                   "--security-opt", "seccomp=unconfined",
-                   "-e", "BENCH_GRADE_REVEAL=1",
-                   image, "mcp-server"]
-            bug_dir, workspace = "/src", "/workspace"
-        else:
-            # Dev/local path: a host mcp-server graded against the local oracle.
-            env["BENCH_BUG_DIR"] = bug_dir
-            env["BENCH_WORKSPACE"] = workspace
-            # Grader reads expected.yaml + binaries from the oracle dir; the agent
-            # never sees it. Defaults to bug_dir for back-compat when unset.
-            env["BENCH_ORACLE_DIR"] = oracle_dir or bug_dir
-            env["BENCH_GRADE_REVEAL"] = "1"  # trusted runner: see note above
-            cmd = [server_bin]
+        self._cid_dir = tempfile.mkdtemp(prefix="fbcid-")
+        self._cidfile = os.path.join(self._cid_dir, "cid")
+        cmd = ["docker", "run", "-i", "--rm",
+               "--cidfile", self._cidfile,
+               "--security-opt", "seccomp=unconfined",
+               "-e", "BENCH_GRADE_REVEAL=1",
+               image, "mcp-server"]
+        bug_dir, workspace = "/src", "/workspace"
         self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
