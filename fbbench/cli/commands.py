@@ -18,7 +18,7 @@ from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
     route_provider,
 )
-from fbbench.paths import REPO, SERVER, resolve_output
+from fbbench.paths import REPO, SERVER
 
 # Reference PoCs that are slow to grade (long harness / heavy build); skipped
 # by `grade-all` unless --include-slow is passed.
@@ -283,16 +283,17 @@ def cmd_models(_args) -> int:
 
 
 def cmd_run(args) -> int:
-    """Drive an LLM agent through one bug. Wraps `python -m fbbench.runner`.
+    """Run an LLM agent through one OR many challenges — one entry, one path.
 
-    Auto-builds bin/mcp-server, provisions .venv on first use, loads the
-    provider API key from .env, and — if --model is omitted — picks a sane
-    default model based on which provider's key you have.
+    A single run is just a 1-cell matrix; N bugs/models/samples is a sweep. Both
+    go through the SAME engine (orchestrator.run_matrix). Always pulls the public
+    challenge image and grades via the remote oracle (no local mode).
     """
-    _require_bug(args.bug_id)  # validate bug exists before any setup work
+    from fbbench.sweep.orchestrator import run_matrix, resolve_models, resolve_bugs
 
     env_combined = {**read_dotenv(), **os.environ}
 
+    # ---- resolve model(s): one | csv | sweep | all (or auto-detect one) ---
     if args.model is None:
         provider, have = detect_provider()
         if provider is None:
@@ -304,96 +305,46 @@ def cmd_run(args) -> int:
                 "    GEMINI_API_KEY=...             # gemini-* models\n"
                 "    DEEPSEEK_API_KEY=sk-...        # deepseek-* models\n"
                 "  see `./fb-bench models` for the full list."))
-        model = PROVIDER_DEFAULT[provider]
-        print(dim(f"  no --model given; using {model} "
+        models = [PROVIDER_DEFAULT[provider]]
+        print(dim(f"  no --model given; using {models[0]} "
                   f"(detected {PROVIDER_KEY_ENV[provider]} in .env)"))
-        if len(have) > 1:
-            others = ", ".join(PROVIDER_DEFAULT[p] for p in have if p != provider)
-            print(dim(f"  other providers available too: {others}"))
     else:
-        model = args.model
-        provider = route_provider(model)
-        if provider == "unknown":
-            sys.exit(red(f"  cannot route model {model!r} to a provider "
-                         "(expected claude*/gpt*/gemini*)"))
-        if (needs_key(provider) and not args.api_key
-                and not env_combined.get(PROVIDER_KEY_ENV[provider])):
-            sys.exit(red(
-                f"  model {model!r} needs ${PROVIDER_KEY_ENV[provider]} "
-                f"but it is not set in ./.env or env.\n"
-                f"  add it to ./.env or pass --api-key."))
+        models = resolve_models(args.model)
+        # Validate the key only for the common single-concrete-model case; a
+        # lineup (sweep/all/csv) lets each cell surface its own missing-key error.
+        if len(models) == 1:
+            provider = route_provider(models[0])
+            if provider == "unknown":
+                sys.exit(red(f"  cannot route model {models[0]!r} to a provider "
+                             "(expected claude*/gpt*/gemini*)"))
+            if (needs_key(provider) and not args.api_key
+                    and not env_combined.get(PROVIDER_KEY_ENV[provider])):
+                sys.exit(red(
+                    f"  model {models[0]!r} needs ${PROVIDER_KEY_ENV[provider]} "
+                    f"but it is not set in ./.env or env.\n"
+                    f"  add it to ./.env or pass --api-key."))
 
-    # ---- build + venv -----------------------------------------------------
-    # Canonical (default) path drives the public challenge image's own baked-in
-    # mcp-server over `docker run`, so the host binary is only needed for --local.
-    if getattr(args, "local", False) and not SERVER.exists():
-        print(dim("  bin/mcp-server missing — building (requires go ≥ 1.22)…"))
-        if subprocess.call(["make", "mcp-server"], cwd=str(REPO)) != 0:
-            sys.exit(red("  build failed; run `make mcp-server` manually"))
+    # ---- resolve bug(s): one | csv | all (validates, exits on unknown) ----
+    bugs = resolve_bugs(args.bugs)
 
-    # The runner runs in whatever interpreter already has the deps. A dev
-    # checkout keeps them in <repo>/.venv (provisioned by `make setup`); a
-    # `pip install -e .` user has them in the current interpreter — use that.
+    # The runner subprocess runs in whatever interpreter has the deps: a dev
+    # checkout's .venv if present, else the current interpreter (pip-installed).
     venv_py = REPO / ".venv" / "bin" / "python"
-    if venv_py.is_file():
-        runner_py = str(venv_py)
-    elif (REPO / "Makefile").is_file():
-        print(dim("  .venv missing — running `make setup` (one-time)…"))
-        if subprocess.call(["make", "setup"], cwd=str(REPO)) != 0:
-            sys.exit(red("  setup failed; run `make setup` manually"))
-        runner_py = str(venv_py)
-    else:
-        runner_py = sys.executable
+    runner_py = str(venv_py) if venv_py.is_file() else sys.executable
 
-    # ---- pick output dir --------------------------------------------------
-    # One knob: --output is the results root (default ./output). A bare name
-    # nests under it (paper-v1 -> output/paper-v1); a path is used as-is. Each
-    # run gets its own auto-incrementing run-N under <root>/<bug>/<model>/.
-    root = resolve_output(args.output)
-    base = root / args.bug_id / model
-    base.mkdir(parents=True, exist_ok=True)
-    n = 0
-    while (base / f"run-{n}").exists():
-        n += 1
-    out_dir = base / f"run-{n}"
-
-    # ---- invoke runner ----------------------------------------------------
-    cmd = [runner_py, "-m", "fbbench.runner",
-           "--bug", args.bug_id,
-           "--model", model,
-           "--max-turns", str(args.max_turns),
-           "--out-dir", str(out_dir)]
-    if args.api_key:
-        cmd += ["--api-key", args.api_key]
-    cmd.append("--preserve-pocs" if args.preserve_pocs else "--no-preserve-pocs")
-    if not getattr(args, "stop_on_solve", True):
-        cmd.append("--no-stop-on-solve")
-    if getattr(args, "full_scan", False):
-        cmd.append("--full-scan")
-    if getattr(args, "local", False):
-        cmd.append("--local")
-    if getattr(args, "image_prefix", None):
-        cmd += ["--image-prefix", args.image_prefix]
-
-    print()
-    print(bold("  fb-bench run  ") + cyan(args.bug_id) +
-          dim(f"  model={model}  max-turns={args.max_turns}"))
-    print(dim(f"  output:    {out_dir}"))
-    print()
-    rc = subprocess.call(cmd, cwd=str(REPO), env=env_combined)
-
-    # Tell the user exactly where everything landed.
-    print()
-    print(bold("  results saved to:"))
-    print(cyan(f"    {out_dir}"))
-    for f, what in (("score.json", "the capability-ladder verdict + cost"),
-                    ("report.html", "human-readable run report (open in a browser)"),
-                    ("traj.md", "tool-call trajectory"),
-                    ("transcript.jsonl", "full per-turn transcript"),
-                    ("episode.jsonl", "raw episode events")):
-        if (out_dir / f).is_file():
-            print(dim(f"      {f:18s} {what}"))
-    return rc
+    return run_matrix(
+        models, bugs,
+        samples=args.samples, output=args.output,
+        max_turns=args.max_turns, timeout=args.timeout, jobs=args.jobs,
+        dashboard_pref=getattr(args, "dashboard", None),
+        preserve_pocs=args.preserve_pocs,
+        full_scan=getattr(args, "full_scan", True),
+        stop_on_solve=getattr(args, "stop_on_solve", True),
+        api_key=args.api_key,
+        image_prefix=getattr(args, "image_prefix", None),
+        report_only=getattr(args, "report_only", False),
+        runner=[runner_py, "-m", "fbbench.runner"],
+    )
 
 
 def cmd_report(args) -> int:

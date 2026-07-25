@@ -32,16 +32,30 @@ def build_parser() -> argparse.ArgumentParser:
                           help="print oracle evidence")
     sp_grade.set_defaults(fn=commands.cmd_grade)
 
-    sp_run = sub.add_parser("run", help="drive an LLM agent through one bug (one-liner)")
-    sp_run.add_argument("bug_id")
+    sp_run = sub.add_parser("run", help="run an LLM agent through one or many challenges")
+    sp_run.add_argument("bugs", metavar="bugs",
+                        help="which challenge(s): a single alias (avro-03), a comma "
+                             "list (avro-03,jq-01), or 'all'")
     sp_run.add_argument("--model", default=None,
-                        help="model id (default: auto-pick from provider key in .env)")
+                        help="which model(s): one id, a comma list, 'sweep' (default "
+                             "lineup), or 'all'. Default: auto-pick from the provider "
+                             "key in .env")
+    sp_run.add_argument("--samples", type=int, default=1, metavar="N",
+                        help="repeat count: run each (model, bug) N times, stored as "
+                             "seed-0..seed-(N-1) (default 1). Same --output resumes it")
     sp_run.add_argument("--max-turns", type=int, default=100,
-                        help="turn budget (default: 100 for full-scan; diff-scan uses 50)")
+                        help="turn budget per episode (default 100)")
+    sp_run.add_argument("--timeout", type=int, default=1800,
+                        help="per-episode wall-clock seconds (default 1800)")
+    sp_run.add_argument("--jobs", "-j", type=int, default=1,
+                        help="run N cells concurrently (default 1). 4-6 is usually the "
+                             "sweet spot before model rate limits kick in")
     sp_run.add_argument("--output", "-o", default=None,
                         help="where results land (default: ./output). A bare name nests "
                              "under it (paper-v1 -> output/paper-v1); a path is used as-is. "
-                             "Each run gets output/<bug>/<model>/run-N/")
+                             "Cells: output/<bug>/<model>/seed-N/")
+    sp_run.add_argument("--report-only", action="store_true",
+                        help="skip running; just re-aggregate the leaderboard from <output>/")
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{solved,failed}/ "
                              "(default on; --no-preserve-pocs to disable)")
@@ -49,17 +63,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="end at the first target solve (default on; "
                              "--no-stop-on-solve lets the agent keep hunting until "
                              "it stops or --max-turns)")
-    sp_run.add_argument("--full-scan", action="store_true",
-                        help="harder mode: withhold the bug description; the agent "
-                             "gets only the harness and must find a crashing input")
+    sp_run.add_argument("--full-scan", action=argparse.BooleanOptionalAction, default=True,
+                        help="blind mode: withhold the bug description; the agent gets "
+                             "only the harness (default on — the public benchmark is "
+                             "always blind)")
+    dash = sp_run.add_mutually_exclusive_group()
+    dash.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
+                      help="force the live full-screen dashboard (default: on for a TTY, "
+                           "single-job runs)")
+    dash.add_argument("--no-dashboard", dest="dashboard", action="store_false",
+                      help="disable the live dashboard; line-by-line logs instead")
     sp_run.add_argument("--api-key", default=None,
                         help="provider API key; default reads ./.env")
-    sp_run.add_argument("--local", action="store_true",
-                        help="DEV ONLY: drive a host mcp-server graded against the "
-                             "local oracle. The default (canonical) path pulls the "
-                             "PUBLIC challenge image and grades via the remote oracle "
-                             "baked into it — identical to what anyone else runs, so "
-                             "scores are reproducible. Needs only Docker, not Go.")
     sp_run.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
                         help="registry prefix for the canonical challenge images")
     sp_run.set_defaults(fn=commands.cmd_run)

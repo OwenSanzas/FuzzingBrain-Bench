@@ -87,16 +87,34 @@ def bug_kb(bug: str) -> list[str]:
     return capability_set(bd) if bd else list(DEFAULT_KB)
 
 
-def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
-             timeout: int, preserve_pocs: bool = True,
-             full_scan: bool = False) -> dict | None:
-    cd = cell_dir(out, bug, model, sample)
-    cmd = RUNNER + ["--bug", bug, "--model", model,
-                    "--max-turns", str(max_turns),
-                    "--out-dir", str(cd)]
+def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
+             preserve_pocs: bool = True, full_scan: bool = True,
+             stop_on_solve: bool = True, api_key: str | None = None,
+             image_prefix: str | None = None, runner: list[str] | None = None) -> list[str]:
+    """The exact `python -m fbbench.runner` argv for one cell. Single source of
+    truth so the single and multi paths forward the SAME per-cell flags."""
+    cmd = (runner or RUNNER) + ["--bug", bug, "--model", model,
+                                "--max-turns", str(max_turns), "--out-dir", str(cd)]
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
+    if not stop_on_solve:
+        cmd.append("--no-stop-on-solve")
     if full_scan:
         cmd.append("--full-scan")
+    if api_key:
+        cmd += ["--api-key", api_key]
+    if image_prefix:
+        cmd += ["--image-prefix", image_prefix]
+    return cmd
+
+
+def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
+             timeout: int, preserve_pocs: bool = True, full_scan: bool = True,
+             *, stop_on_solve: bool = True, api_key: str | None = None,
+             image_prefix: str | None = None, runner: list[str] | None = None) -> dict | None:
+    cd = cell_dir(out, bug, model, sample)
+    cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
+                   full_scan=full_scan, stop_on_solve=stop_on_solve,
+                   api_key=api_key, image_prefix=image_prefix, runner=runner)
     try:
         subprocess.run(cmd, cwd=REPO, timeout=timeout,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -150,92 +168,64 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
     print("=" * 82)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="FuzzingBrain Bench batch sweep")
-    ap.add_argument("--models", default="claude-opus-4-7",
-                    help="'sweep' | 'all' | comma list of model ids")
-    ap.add_argument("--bugs", default="all", help="'all' | comma list of bug ids")
-    ap.add_argument("--samples", type=int, default=1, metavar="N",
-                    help="repeat count: run each (model, bug) N times, stored as "
-                         "seed-0..seed-(N-1) (default 1). Resumable: re-run with a "
-                         "larger N to add the missing repeats.")
-    ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
-                    help="save every graded blob (default on; --no-preserve-pocs to disable)")
-    # Public benchmark is always blind; normal (hinted) mode is removed from the
-    # public repo (it exists only in the private answers repo). Kept as a no-op.
-    ap.add_argument("--full-scan", action="store_true", default=True,
-                    help=argparse.SUPPRESS)
-    ap.add_argument("--max-turns", type=int, default=100,
-                    help="turn budget per episode (default 100 for full-scan; diff-scan uses 50)")
-    ap.add_argument("--timeout", type=int, default=1800, help="per-episode seconds")
-    ap.add_argument("--output", "-o", default=None,
-                    help="where results land (default: ./output). A bare name nests "
-                         "under it (paper-v1 -> output/paper-v1); a path is used as-is "
-                         "(/data/x, ./x). Cells: <output>/<bug>/<model>/seed-N/. "
-                         "Re-running the same --output resumes it.")
-    ap.add_argument("--report-only", action="store_true",
-                    help="skip running; just re-aggregate from <output>/")
-    ap.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
-                    help="force the live full-screen dashboard (default: on when stdout is a TTY)")
-    ap.add_argument("--no-dashboard", dest="dashboard", action="store_false",
-                    help="disable the live dashboard; fall back to line-by-line logs")
-    ap.add_argument("--jobs", "-j", type=int, default=1,
-                    help="run N cells concurrently (default 1). Parallel runs use "
-                         "line-by-line logs, not the live dashboard. Each cell is its "
-                         "own subprocess + Docker container, graded independently — "
-                         "but a high N can trip model rate limits (→ SDK backoff), so "
-                         "4–6 is usually the sweet spot.")
-    args = ap.parse_args()
-
-    out = resolve_output(args.output)
+def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
+               output: str | None = None, max_turns: int = 100, timeout: int = 1800,
+               jobs: int = 1, dashboard_pref: bool | None = None,
+               preserve_pocs: bool = True, full_scan: bool = True,
+               stop_on_solve: bool = True, api_key: str | None = None,
+               image_prefix: str | None = None, report_only: bool = False,
+               runner: list[str] | None = None) -> int:
+    """THE engine: run the (models x bugs x samples) matrix. One code path for
+    both a single cell (len 1) and a full sweep (len N) — a single run is just a
+    matrix of size one. `fb-bench run` and the module __main__ both call this."""
+    if samples < 1:
+        raise ValueError("samples must be >= 1 (a repeat count, not a seed index)")
+    out = resolve_output(output)
     print(f"  output: {out}")
-    models = resolve_models(args.models)
-    bugs = resolve_bugs(args.bugs)
-    if args.samples < 1:
-        ap.error("--samples must be >= 1 (it is a repeat count, not a seed index)")
-    samples = list(range(args.samples))  # N -> seed indices [0 .. N-1]
+    seeds = list(range(samples))  # N -> seed indices [0 .. N-1]
 
-    if args.report_only:
-        aggregate(out, models, bugs, samples)
+    if report_only:
+        aggregate(out, models, bugs, seeds)
         return 0
 
     # samples-major order: one full (model x bug) pass per sample, so repeats of
-    # the same cell are spread across time (decorrelates transient API/model
-    # conditions) instead of running back-to-back. Tuple stays (m, b, s) so all
-    # downstream unpacking is unchanged; only iteration order differs.
-    cells = [(m, b, s) for s in samples for m in models for b in bugs]
+    # the same cell are spread across time (decorrelates transient conditions).
+    cells = [(m, b, s) for s in seeds for m in models for b in bugs]
     done = sum(1 for m, b, s in cells if (cell_dir(out, b, m, s) / "score.json").is_file())
-    print(f"  sweep: {len(models)} models x {len(bugs)} bugs x {len(samples)} samples "
-          f"= {len(cells)} cells ({done} already done, {len(cells)-done} to run)")
+    print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
+          f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
 
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
     console = Console()
-    use_dash = args.dashboard if args.dashboard is not None else console.is_terminal
-    STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=samples,
-                     max_turns=args.max_turns, full_scan=args.full_scan,
+    use_dash = dashboard_pref if dashboard_pref is not None else console.is_terminal
+    STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
+                     max_turns=max_turns, full_scan=full_scan,
                      total=len(cells), already_done=done)
 
-    jobs = max(1, args.jobs)
+    def _cell(model, bug, sample):
+        return run_cell(model, bug, sample, max_turns, out, timeout,
+                        preserve_pocs=preserve_pocs, full_scan=full_scan,
+                        stop_on_solve=stop_on_solve, api_key=api_key,
+                        image_prefix=image_prefix, runner=runner)
+
+    jobs = max(1, jobs)
     t0 = time.time()
 
     if jobs > 1:
         # Parallel: each cell is an independent subprocess + Docker container,
         # graded independently by the remote oracle, so concurrency is safe.
-        # subprocess.run releases the GIL → threads are enough. No live
-        # dashboard in this mode (interleaved cells would scramble it).
         from concurrent.futures import ThreadPoolExecutor
 
         todo = [(i, m, b, s) for i, (m, b, s) in enumerate(cells, 1)
                 if not (cell_dir(out, b, m, s) / "score.json").is_file()]
-        print(f"  running {len(todo)} cells with {jobs} parallel workers "
+        print(f"  running {len(todo)} cell(s) with {jobs} parallel workers "
               f"(line-by-line logs; {done} skipped as already done)", flush=True)
 
         def _run_one(item):
             i, model, bug, sample = item
             print(f"  [{i}/{len(cells)}] start {model} / {bug} / sample-{sample}", flush=True)
-            r = run_cell(model, bug, sample, args.max_turns, out, args.timeout,
-                         preserve_pocs=args.preserve_pocs, full_scan=args.full_scan)
+            r = _cell(model, bug, sample)
             if r and "error" not in r:
                 print(f"      -> [{bug}] {r.get('tier_score','?')}/5  "
                       f"{r.get('terminated_reason','')}  ${r.get('total_usd') or 0.0:.4f}",
@@ -257,34 +247,28 @@ def main() -> int:
                 tag = f"[{i}/{len(cells)}] {model} / {bug} / sample-{sample}"
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
-                    cmd = RUNNER + ["--bug", bug, "--model", model,
-                                    "--max-turns", str(args.max_turns), "--out-dir", str(cd)]
-                    cmd.append("--preserve-pocs" if args.preserve_pocs else "--no-preserve-pocs")
-                    if args.full_scan:
-                        cmd.append("--full-scan")
-                    r = run_cell_tailing(cmd, str(REPO), args.timeout,
+                    cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
+                                   full_scan=full_scan, stop_on_solve=stop_on_solve,
+                                   api_key=api_key, image_prefix=image_prefix, runner=runner)
+                    r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
                     STATUS.cell_finish(model, bug, sample, r)
                 else:
                     print(f"  {tag} ...", flush=True)
-                    r = run_cell(model, bug, sample, args.max_turns, out, args.timeout,
-                                 preserve_pocs=args.preserve_pocs, full_scan=args.full_scan)
+                    r = _cell(model, bug, sample)
                     if r and "error" not in r:
-                        ts = r.get("tier_score", "?")
-                        print(f"      -> {ts}/5  {r.get('terminated_reason','')}  "
+                        print(f"      -> {r.get('tier_score','?')}/5  {r.get('terminated_reason','')}  "
                               f"${r.get('total_usd') or 0.0:.4f}", flush=True)
                     else:
                         print(f"      -> FAILED: {r.get('error') if r else 'unknown'}", flush=True)
 
     elapsed = time.time() - t0
-    # STATUS.total_cost is only fed by the dashboard path; in parallel/line mode
-    # sum straight from the cells on disk so the figure is always right.
     spent = STATUS.total_cost
     if jobs > 1 or not spent:
         spent = 0.0
         for m in models:
             for b in bugs:
-                for s in samples:
+                for s in seeds:
                     sj = cell_dir(out, b, m, s) / "score.json"
                     if sj.is_file():
                         try:
@@ -292,18 +276,42 @@ def main() -> int:
                         except (OSError, ValueError):
                             pass
     print(f"\n  done in {elapsed:.0f}s, spent ~${spent:.2f} total (all cells on disk)")
-    aggregate(out, models, bugs, samples)
+    aggregate(out, models, bugs, seeds)
 
-    # Self-contained, answer-free summary page for the whole sweep.
+    # Self-contained, answer-free summary page.
     try:
         from fbbench.report import write_summary
-        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=samples,
-                            max_turns=args.max_turns, full_scan=args.full_scan,
-                            elapsed_s=elapsed)
+        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=seeds,
+                            max_turns=max_turns, full_scan=full_scan, elapsed_s=elapsed)
         print(f"  summary: {idx}")
     except Exception as e:  # noqa: BLE001
         print(f"  (summary generation skipped: {e})")
     return 0
+
+
+def main() -> int:
+    """Deprecated direct entry — `fb-bench run` is the front door. Kept as a thin
+    wrapper over run_matrix() for back-compat."""
+    ap = argparse.ArgumentParser(description="FuzzingBrain Bench batch sweep "
+                                             "(use `fb-bench run` instead)")
+    ap.add_argument("--models", default="claude-opus-4-7")
+    ap.add_argument("--bugs", default="all")
+    ap.add_argument("--samples", type=int, default=1, metavar="N")
+    ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--full-scan", action="store_true", default=True, help=argparse.SUPPRESS)
+    ap.add_argument("--max-turns", type=int, default=100)
+    ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--output", "-o", default=None)
+    ap.add_argument("--report-only", action="store_true")
+    ap.add_argument("--dashboard", dest="dashboard", action="store_true", default=None)
+    ap.add_argument("--no-dashboard", dest="dashboard", action="store_false")
+    ap.add_argument("--jobs", "-j", type=int, default=1)
+    args = ap.parse_args()
+    return run_matrix(resolve_models(args.models), resolve_bugs(args.bugs),
+                      samples=args.samples, output=args.output, max_turns=args.max_turns,
+                      timeout=args.timeout, jobs=args.jobs, dashboard_pref=args.dashboard,
+                      preserve_pocs=args.preserve_pocs, full_scan=args.full_scan,
+                      report_only=args.report_only)
 
 
 if __name__ == "__main__":
