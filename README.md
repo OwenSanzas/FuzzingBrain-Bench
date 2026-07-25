@@ -75,20 +75,31 @@ Models: `claude-haiku-4-5` · `claude-sonnet-4-6` · `claude-opus-4-7` ·
 `deepseek-v4-pro` · `deepseek-v4-flash`
 (any catalog id works via `--model`; see `fb-bench models`).
 
-### 3. Run the whole corpus with a model
+### 3. Run many — same command, one or many
+
+`fb-bench run` takes one bug or many, one model or many. A single run is just a
+matrix of size one, so there is no separate "sweep" command:
 
 ```bash
 # one model over all 69 challenges (resumable: rerun with the same --output to skip done)
-python -m fbbench.sweep.orchestrator --models claude-haiku-4-5 --bugs all --output run1
+fb-bench run all --model claude-haiku-4-5 --output run1
 
-# default multi-model lineup, all challenges
-python -m fbbench.sweep.orchestrator --models sweep --bugs all --output sweep1
+# the curated cross-model roster, all challenges, 4 cells in parallel
+fb-bench run all --model default-lineup --output sweep1 --jobs 4
+
+# a couple of bugs, 3 samples each
+fb-bench run avro-03,jq-01 --model gpt-5.5 --samples 3
+
+# just re-print the leaderboard from an existing run
+fb-bench run all --model claude-haiku-4-5 --output run1 --report-only
 ```
 
-Results land in `output/<name>/<bug>/<model>/seed-N/` (`score.json`, `episode.jsonl`,
-`transcript.jsonl`, `cost.json`, distilled `traj.md`); a leaderboard is printed
-and re-aggregable with `--report-only --output <name>`. `--output` takes a bare
-name (nested under `output/`) or a path (used as-is).
+`<bugs>` is one alias, a comma list, or `all`; `--model` is one id, a comma list,
+`default-lineup`, or `all`. Results land in `output/<name>/<bug>/<model>/seed-N/`
+(`score.json`, `episode.jsonl`, `transcript.jsonl`, `cost.json`, distilled
+`traj.md`); a leaderboard is printed at the end. `--output` takes a bare name
+(nested under `output/`) or a path (used as-is), and re-running the same
+`--output` resumes it.
 
 ### 4. Agent mode (Codex) — one challenge
 
@@ -125,15 +136,15 @@ How much context the agent is handed defines the difficulty:
 
 | Mode | The agent sees | Turn budget | Runs against |
 |---|---|---|---|
-| **normal** (default) | harness + source + a neutral description | 100 | public images |
-| **full** (`--full-scan`) | harness + source only — **no description**; find the crash cold | **100** | public images |
+| **blind** (default) | harness + source only — **no description**; find the crash cold | 100 | public images |
 | **delta-0 … delta-3** | additionally the crash-region file, mixed with **0/1/2/3** distractor files | **50** | private eval harness |
 
-`full` is the hardest public mode — add `--full-scan` to any `fb-bench run` or
-orchestrator command. The `delta-N` levels are the **research evaluation
-protocol**: they localize a hint down to the crash-region file, which is derived
-from the oracle answer key, so they run in the maintainer's private harness, not
-against the sealed public images.
+The public benchmark is **always blind** (`--full-scan`, on by default): the bug
+description is withheld and the agent must find a crashing input from the harness
+and source alone. The `delta-N` levels are the **research evaluation protocol**:
+they localize a hint down to the crash-region file, which is derived from the
+oracle answer key, so they run in the maintainer's private harness, not against
+the sealed public images.
 
 ## The capability ladder
 
@@ -152,13 +163,15 @@ Not every rung applies to every bug — each challenge declares its required set
 ## Other parameters
 
 ```bash
-fb-bench run <alias> \
-    --model gpt-5.5 \
-    --full-scan \             # withhold the description (hard mode)
-    --max-turns 100 \         # turn budget (default 100 for full-scan; diff-scan uses 50)
+fb-bench run <bugs> \
+    --model gpt-5.5 \         # one id, comma list, default-lineup, or all
+    --max-turns 100 \         # turn budget per episode
+    --timeout 1800 \          # per-episode wall-clock seconds
+    --jobs 4 \                # run N cells in parallel
+    --samples 3 \             # repeat each (model, bug) N times
     --output my-experiment \  # results under output/my-experiment/ (name or path)
     --no-preserve-pocs \      # graded blobs are KEPT by default; pass this to drop them
-    --force-full              # ignore early stops; spend the full budget
+    --no-stop-on-solve        # keep hunting for more crashes after the first solve
 ```
 
 Grade a hand-crafted or external (AFL++ / libFuzzer / honggfuzz) PoC without any
@@ -181,9 +194,10 @@ holds the answer key and returns only the verdict.
 docker.io/osanzas/fbbench-challenge-<alias>:latest     # 69 public images
 ```
 
-The seal architecture and the grading-server source live in
-[`tools/sealed/`](tools/sealed/) and [`tools/mcp-server/`](tools/mcp-server/);
-anyone can audit that no answer key ships with an image:
+Grading is a network call to the remote oracle (the answer key never ships with
+an image); the mcp-server that runs inside each image is pre-built. The seal
+architecture and the answer-free verifier live in [`tools/sealed/`](tools/sealed/)
+— anyone can audit that no answer key ships with an image:
 
 ```bash
 python tools/sealed/verify_sealed.py docker.io/osanzas/fbbench-challenge-avro-03:latest
@@ -194,13 +208,13 @@ python tools/sealed/verify_sealed.py docker.io/osanzas/fbbench-challenge-avro-03
 ```
 bugs/<project>/<alias>/   one challenge: fuzz harness + neutral metadata
                           (project, language, sanitizer, harness interface)
-fbbench/                  the runner / CLI engine + sweep + codex arm
-tools/sealed/             challenge index, seal architecture, answer-free verifier
-tools/mcp-server/         the MCP + remote grading server (Go source, auditable)
+fbbench/                  the CLI + run engine + codex / claude-code arms
+tools/sealed/             challenge index + answer-free image verifier
 ```
 
-The answer artifacts (PoC inputs, expected-fault keys, pre-built binaries) are
-**not** in this repository — they live only behind the remote grading oracle.
+The answer artifacts (PoC inputs, expected-fault keys, pre-built binaries) and
+the grading-server source are **not** in this repository — grading is a remote
+call and the answer key lives only behind the oracle.
 
 ## License
 
