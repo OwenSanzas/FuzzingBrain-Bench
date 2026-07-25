@@ -1,18 +1,17 @@
 # FuzzingBrain Bench runner
 
-Drives one episode = one `(model, bug)` cell. Speaks to the
-`tools/mcp-server/` Go binary over stdio; uses provider SDKs (Anthropic /
-OpenAI / Google) for the model loop.
+Drives one episode = one `(model, bug)` cell. It `docker run`s the public
+challenge image (the mcp-server is baked in) and talks to it over stdio; uses
+provider SDKs (Anthropic / OpenAI / Google) for the model loop.
 
-> **You probably want `./fb-bench run <bug>`** — it wraps this module,
-> auto-builds `bin/mcp-server`, provisions `.venv`, picks a default model
-> from your `.env`, and auto-picks an output dir. This README is for
-> calling the runner directly (batch / sweep scripts).
+> **You probably want `./fb-bench run <bugs>`** — it wraps this module, picks a
+> default model from your `.env`, and handles the output layout. This README is
+> for calling the runner directly, one cell at a time.
 
 ## Setup
 
 ```bash
-make setup                                                 # MCP server + venv + pip install -e .
+pip install -e .                                           # needs Python >= 3.10 + Docker
 echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env                 # or OPENAI_/GEMINI_
 ```
 

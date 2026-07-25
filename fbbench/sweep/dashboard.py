@@ -105,7 +105,6 @@ class SweepStatus:
         self.bugs: list[str] = []
         self.samples: list[int] = []
         self.max_turns = 0
-        self.full_scan = False
         self.total = 0
         self.already_done = 0
         self.t0 = 0.0
@@ -117,7 +116,7 @@ class SweepStatus:
 
     # ---- configuration --------------------------------------------------
     def configure(self, *, exp: str, models: list[str], bugs: list[str],
-                  samples: list[int], max_turns: int, full_scan: bool,
+                  samples: list[int], max_turns: int,
                   total: int, already_done: int) -> None:
         with self._lock:
             self.exp = exp
@@ -125,7 +124,6 @@ class SweepStatus:
             self.bugs = bugs
             self.samples = samples
             self.max_turns = max_turns
-            self.full_scan = full_scan
             self.total = total
             self.already_done = already_done
             self.t0 = time.time()
@@ -229,8 +227,6 @@ class SweepStatus:
             sub = Text(no_wrap=True)
             sub.append(f"out {self.exp}", style="dim")
             sub.append(f"  ·  max_turns {self.max_turns}", style="dim")
-            if self.full_scan:
-                sub.append("  ·  full-scan", style="yellow")
             if self.already_done:
                 sub.append(f"  ·  {self.already_done} resumed", style="dim")
             return Panel(Group(head, sub), border_style="green", padding=(0, 1))
@@ -469,7 +465,7 @@ def _preview(static: bool = False) -> None:
     kb = LADDER
     console = Console()
     STATUS.configure(exp="exp-preview", models=models, bugs=bugs, samples=[0],
-                     max_turns=30, full_scan=False, total=len(models) * len(bugs),
+                     max_turns=30, total=len(models) * len(bugs),
                      already_done=0)
 
     # Deterministic pseudo-outcomes (no Math.random equivalent needed).

@@ -6,7 +6,7 @@ This covers the whole conversation surface:
   - the mid-episode nudges (truncation / keep-hunting / budget),
   - the Codex-CLI arm's task prompt (`fbbench.sweep.codex`).
 The MCP TOOL surface (tool descriptions / params, tool errors) is owned by the Go
-MCP server (tools/mcp-server/) — the Python runner fetches it via tools/list, so
+MCP server (baked into the challenge image) — the runner fetches it via tools/list, so
 it is NOT duplicated here. setup() ships no task/description field; the task is
 conveyed by the system prompt.
 
@@ -114,13 +114,10 @@ Only when you are CERTAIN there are no more distinct vulnerabilities reachable t
         "tools/list), so they are NOT restated here.")
 
 
-def system_prompt(full_scan: bool = True) -> str:
-    """The system prompt sent at the start of every episode.
-    Full-scan — no description is given, the agent discovers the fault itself — is
-    the one active mode, so its text IS SYSTEM_PROMPT: nothing is rewritten. The
-    `full_scan` flag is retained as the extension point; if a non-full-scan mode
-    (e.g. a description-given mode) is ever revived, branch here to derive its
-    variant from SYSTEM_PROMPT rather than keeping a second copy."""
+def system_prompt() -> str:
+    """The system prompt sent at the start of every episode. The public benchmark
+    is blind (no description), so its text IS SYSTEM_PROMPT verbatim — one mode,
+    nothing rewritten."""
     return SYSTEM_PROMPT
 
 
@@ -302,10 +299,8 @@ def _fullscan_safe_setup(setup_resp: dict) -> dict:
     return {k: setup_resp[k] for k in _FULLSCAN_SETUP_KEYS if k in setup_resp}
 
 
-# Dynamic template for the first user turn (full-scan). {setup_json} is filled
-# by build_initial_user_message; registered here so the .md shows the shape.
-# (The normal-mode template _INITIAL_USER_TMPL lives in the DEPRECATED section
-# at the end of this file.)
+# Dynamic template for the first (blind) user turn. {setup_json} is filled by
+# build_initial_user_message; registered here so the .md shows the shape.
 _FULLSCAN_INITIAL_TMPL = _reg("initial_user_message_fullscan", """
 {context}
 
@@ -333,22 +328,14 @@ signal), and iterate.""",
           "setup() response)")
 
 
-def build_initial_user_message(bug_desc: str, setup_resp: dict,
-                               full_scan: bool = False) -> str:
-    """First user turn: the per-bug context block plus the description / setup().
-
-    In full_scan mode no description is provided — the agent is handed the harness
-    (the fuzz target), the source, and the sanitizer, and must discover WHAT the
-    bug is and WHERE it lives on its own. The sanitizer is given in every mode
-    (it is part of the fuzzing setup a real auditor always knows).
-    """
-    if full_scan:
-        return _FULLSCAN_INITIAL_TMPL.format(
-            context=bug_context(setup_resp),
-            setup_json=json.dumps(_fullscan_safe_setup(setup_resp), indent=2))
-    return _INITIAL_USER_TMPL.format(
+def build_initial_user_message(setup_resp: dict) -> str:
+    """First user turn: the per-bug context block + the redacted setup(). Blind:
+    no description is given — the agent is handed the harness (the fuzz target),
+    the source, and the sanitizer, and must discover WHAT the bug is and WHERE it
+    lives on its own."""
+    return _FULLSCAN_INITIAL_TMPL.format(
         context=bug_context(setup_resp),
-        description=bug_desc, setup_json=json.dumps(setup_resp, indent=2))
+        setup_json=json.dumps(_fullscan_safe_setup(setup_resp), indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -538,143 +525,24 @@ def derived_prompts() -> list[Prompt]:
 
 
 # ===========================================================================
-# DEPRECATED — normal mode (bug description given), diff-scan mode, and three
-# retired mid-episode nudges (require-preset, force-full, off-target).
+# EXTENSION POINT — diff-scan (delta-N) mode.
 #
-# Only FULL-SCAN is an active mode. The prompts and builders below drive the two
-# retired modes (plus retired mid-episode nudges) and are NOT part of the live
-# pipeline. They are kept here (moved out of the main body, not deleted) for
-# reference / possible revival.
+# NOT wired into the public runner: the public benchmark is blind only. Left as
+# a deliberate skeleton so a future delta-N arm plugs in with minimal work. A
+# diff-scan episode reuses the blind SYSTEM_PROMPT and swaps ONLY the first user
+# turn: instead of "find any crash cold", it names the file(s) a PR changed (no
+# diff, no line, no fault class) and asks the agent to localize + reproduce.
 #
-# NOTE: `build_initial_user_message` (above) still references _INITIAL_USER_TMPL
-# for its full_scan=False branch; if these two modes are removed for good, drop
-# that branch too. These _reg() calls still register (so the modes remain
-# documented in PROMPTS.md), they are simply never sent.
+# To revive: stage the changed files under src/, wire a runner path that calls
+# build_diffscan_message() for the first turn, and fill in the prompt text below
+# (see git history pre-removal for a worked version).
 # ===========================================================================
+def build_diffscan_message(changed_files: list[str], setup_resp: dict) -> str:
+    """First user turn for a diff-scan (delta-N) episode: a names-only PR hint.
 
-# --- DEPRECATED: normal mode (description-given) first user turn ---
-_INITIAL_USER_TMPL = _reg("initial_user_message",
-    "{context}\n\n"
-    "Bug task description (the `description.txt` of this bug):\n\n"
-    "{description}\n\nThe MCP `setup()` you just queried returned:\n\n"
-    "{setup_json}\n\nProduce a PoC. Call `run_input()` to test it.",
-    when="The first user turn of a normal-mode episode.",
-    why="Hands the model the per-bug context (project/language, source + harness "
-        "pointers, sanitizer + its fault family), the bug's description.txt, and "
-        "the setup() payload to start the reproduce loop.",
-    fills="context (bug_context with sanitizer), description (description.txt), "
-          "setup_json (setup() response)")
-
-
-# --- DEPRECATED: diff-scan arm — first user turn ---
-# tools/diffscan_experiment.py ran a full-scan episode (system prompt still
-# withholds the description) but swapped this in for the initial user turn: a
-# names-only PR hint (the changed file(s), no diff / fault type / line). The
-# model had to localize and reproduce from the source.
-_DIFFSCAN_SCOPE_ONE = _reg("diffscan_scope_one",
-    "A recent pull request modified exactly ONE source file (listed below); "
-    "its change introduced the defect, reachable through the (unchanged) harness.",
-    when="Diff-scan episode where the PR touched a single file.",
-    why="Tells the model the lone changed file is where the introduced defect "
-        "lives. The fault FAMILY comes from the sanitizer line above, not from a "
-        "fixed 'memory-safety' label (the corpus is heterogeneous).")
-
-_DIFFSCAN_SCOPE_MANY = _reg("diffscan_scope_many",
-    "A recent pull request modified {n} source files (listed below). AT LEAST "
-    "ONE of them introduced the defect, reachable through the (unchanged) "
-    "harness; the others may be unrelated changes. You must work out which "
-    "file(s) matter.",
-    when="Diff-scan episode where the PR touched several files (one real, the rest "
-         "same-project distractors).",
-    why="The model must localize which of the changed files actually carries the "
-        "defect — distractors test that it reads rather than guesses.",
-    fills="n (number of changed files)")
-
-_DIFFSCAN_INITIAL_TMPL = _reg("initial_user_message_diffscan",
-    "No bug description is provided.\n\n"
-    "{context}\n\n"
-    "{scope}\n\n"
-    "Changed files (the PR touched these; you are NOT given the diff or any line "
-    "number — read the files yourself under `src/`):\n"
-    "{listing}\n\n"
-    "Your task: read the listed file(s) (and the surrounding code as needed), "
-    "find the defect the change introduced, and craft an input that drives the "
-    "harness to make it fault in the way the sanitizer above reports. Also read "
-    "the harness source to learn how it consumes input and which code paths "
-    "reach the changed file(s).\n\n"
-    "The MCP `setup()` you just queried returned (description-bearing fields "
-    "withheld in this mode):\n\n{setup_json}\n\nProduce a triggering input "
-    "and call `run_input()` to test it; read the raw harness output as feedback.",
-    when="The first user turn of a DIFF-SCAN episode (names-only PR hint, no "
-         "description).",
-    why="Gives the model the target context + sanitizer, the changed-file name(s), "
-        "and redacted setup() — but no diff, line number, or specific class. It "
-        "must localize and reproduce from the source alone.",
-    fills="context (bug_context with sanitizer), scope (1-file vs N-file framing), "
-          "listing (changed-file paths under src/), setup_json (redacted setup())")
-
-
-def build_diffscan_message(files: list[str], setup_resp: dict) -> str:
-    """First user turn for a diff-scan episode: a names-only PR hint.
-
-    `files` are repo-relative paths the PR changed (staged under `src/` so the
-    model can read them directly); no diff, line number, or specific class is
-    given. The sanitizer (and thus the fault family) IS given — diff-scan is not
-    the blind tier. The 1-file vs N-file framing is chosen from len(files).
+    STUB — the public benchmark runs blind only. Implement when the delta-N arm
+    lands: reuse bug_context(setup_resp) + _fullscan_safe_setup(setup_resp) and
+    add the `changed_files` listing (no diff / line / class).
     """
-    n = len(files)
-    scope = _DIFFSCAN_SCOPE_ONE if n == 1 else _DIFFSCAN_SCOPE_MANY.format(n=n)
-    listing = "\n".join(f"  - src/{f}" for f in files)
-    return _DIFFSCAN_INITIAL_TMPL.format(
-        context=bug_context(setup_resp),
-        scope=scope, listing=listing,
-        setup_json=json.dumps(_fullscan_safe_setup(setup_resp), indent=2))
-
-
-# --- DEPRECATED: retired mid-episode nudge (force-preset mode) ---
-# Single-target framing that clashes with the breadth goal (find as many distinct
-# crashes as possible) and leaks the hidden target's class/site. The require_preset
-# runner mode was removed; this text is kept for reference and is NEVER sent.
-REQUIRE_PRESET_NUDGE = _reg("require_preset_nudge", """
-Do NOT stop. If your input crashed, it is NOT the specific defect this task \
-targets — a crash at a different location or of a different type (different \
-stack/site/class) does not count. Study the target further and produce a NEW \
-input that triggers the intended fault. Keep iterating.""",
-    when="RETIRED — no longer wired into the runner. (Was: force-preset mode, "
-         "when the model tried to stop before the intended class AND site fired.)",
-    why="RETIRED: single-target framing that clashes with the breadth goal (find "
-        "as many distinct crashes as possible) and leaks the hidden target's "
-        "class/site. The require_preset mode was removed from the runner; the text "
-        "is kept only for reference and is never sent.")
-
-
-# --- DEPRECATED: retired mid-episode nudge (force-full mode) ---
-# The force_full runner mode (ignore the model's own stop, run to the turn budget)
-# was removed in favor of the stop_on_solve flag + agent-driven stopping. Kept for
-# reference; NEVER sent.
-FORCE_FULL_NUDGE = _reg("force_full_nudge", """
-Do NOT stop yet. Keep hunting for more crashes: write a NEW candidate input \
-different from your previous attempts and call run_input() now, then read its \
-output to see whether it faulted and where. There are likely more distinct \
-crashes to find — keep iterating and do not declare completion.""",
-    when="RETIRED — the force_full runner mode was removed. (Was: force-full-budget "
-         "mode, when the model tried to stop early.)",
-    why="RETIRED: superseded by the stop_on_solve flag and agent-driven stopping. "
-        "The text is breadth-consistent but no longer wired; kept for reference and "
-        "never sent.")
-
-
-# --- DEPRECATED: retired mid-episode nudge (off-target crash) ---
-# Single-target framing (a crash that is not THE target "does not count") that
-# clashes with the breadth goal and leaks the hidden target/verdict. Replaced by
-# KEEP_HUNTING_NUDGE (positive, breadth, leak-free). Kept for reference; NEVER sent.
-OFF_TARGET_NUDGE = _reg("off_target_nudge", """
-Your input triggered a crash, but it did NOT reproduce the specific vulnerability \
-this challenge targets — a crash at a different location or of a different type \
-does not count. Do not stop or declare success. Study the target further and \
-produce a NEW input that triggers the intended fault. Keep iterating.""",
-    when="RETIRED — replaced by KEEP_HUNTING_NUDGE. (Was: a run_input candidate "
-         "faulted but the oracle reported it is not the target defect.)",
-    why="RETIRED: single-target framing that clashes with the breadth goal and "
-        "leaks the hidden target/verdict. Replaced by KEEP_HUNTING_NUDGE (positive, "
-        "breadth, leak-free). Kept for reference and never sent.")
+    raise NotImplementedError(
+        "diff-scan (delta-N) mode is not implemented in the public benchmark")

@@ -21,27 +21,38 @@ def build_parser() -> argparse.ArgumentParser:
     sp_show.add_argument("bug_id")
     sp_show.set_defaults(fn=commands.cmd_show)
 
-    sp_grade = sub.add_parser("grade", help="grade a blob against a bug's oracle")
+    sp_grade = sub.add_parser("grade",
+                              help="grade an input file against a bug's remote oracle (no LLM)")
     sp_grade.add_argument("bug_id")
-    sp_grade.add_argument("blob", nargs="?",
-                          help="path to blob (default: bug's own poc/poc.bin)")
-    sp_grade.add_argument("--rounds", type=int, default=1,
-                          help="grade rounds (default 1; the corpus is deterministic). "
-                               "Use --rounds 3 as the opt-in determinism gate.")
+    sp_grade.add_argument("blob", help="path to the input file to grade")
     sp_grade.add_argument("-v", "--verbose", action="store_true",
                           help="print oracle evidence")
     sp_grade.set_defaults(fn=commands.cmd_grade)
 
-    sp_run = sub.add_parser("run", help="drive an LLM agent through one bug (one-liner)")
-    sp_run.add_argument("bug_id")
+    sp_run = sub.add_parser("run", help="run an LLM agent through one or many challenges")
+    sp_run.add_argument("bugs", metavar="bugs",
+                        help="which challenge(s): a single alias (avro-03), a comma "
+                             "list (avro-03,jq-01), or 'all'")
     sp_run.add_argument("--model", default=None,
-                        help="model id (default: auto-pick from provider key in .env)")
+                        help="which model(s): one id, a comma list, 'default-lineup' "
+                             "(the curated cross-model roster), or 'all'. Default: "
+                             "auto-pick from the provider key in .env")
+    sp_run.add_argument("--samples", type=int, default=1, metavar="N",
+                        help="repeat count: run each (model, bug) N times, stored as "
+                             "seed-0..seed-(N-1) (default 1). Same --output resumes it")
     sp_run.add_argument("--max-turns", type=int, default=100,
-                        help="turn budget (default: 100 for full-scan; diff-scan uses 50)")
+                        help="turn budget per episode (default 100)")
+    sp_run.add_argument("--timeout", type=int, default=1800,
+                        help="per-episode wall-clock seconds (default 1800)")
+    sp_run.add_argument("--jobs", "-j", type=int, default=1,
+                        help="run N cells concurrently (default 1). 4-6 is usually the "
+                             "sweet spot before model rate limits kick in")
     sp_run.add_argument("--output", "-o", default=None,
                         help="where results land (default: ./output). A bare name nests "
                              "under it (paper-v1 -> output/paper-v1); a path is used as-is. "
-                             "Each run gets output/<bug>/<model>/run-N/")
+                             "Cells: output/<bug>/<model>/seed-N/")
+    sp_run.add_argument("--report-only", action="store_true",
+                        help="skip running; just re-aggregate the leaderboard from <output>/")
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{solved,failed}/ "
                              "(default on; --no-preserve-pocs to disable)")
@@ -49,17 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="end at the first target solve (default on; "
                              "--no-stop-on-solve lets the agent keep hunting until "
                              "it stops or --max-turns)")
-    sp_run.add_argument("--full-scan", action="store_true",
-                        help="harder mode: withhold the bug description; the agent "
-                             "gets only the harness and must find a crashing input")
+    dash = sp_run.add_mutually_exclusive_group()
+    dash.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
+                      help="force the live full-screen dashboard (default: on for a TTY, "
+                           "single-job runs)")
+    dash.add_argument("--no-dashboard", dest="dashboard", action="store_false",
+                      help="disable the live dashboard; line-by-line logs instead")
     sp_run.add_argument("--api-key", default=None,
                         help="provider API key; default reads ./.env")
-    sp_run.add_argument("--local", action="store_true",
-                        help="DEV ONLY: drive a host mcp-server graded against the "
-                             "local oracle. The default (canonical) path pulls the "
-                             "PUBLIC challenge image and grades via the remote oracle "
-                             "baked into it — identical to what anyone else runs, so "
-                             "scores are reproducible. Needs only Docker, not Go.")
     sp_run.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
                         help="registry prefix for the canonical challenge images")
     sp_run.set_defaults(fn=commands.cmd_run)
@@ -81,15 +89,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("models",
                    help="list supported models + show which provider keys are loaded"
                    ).set_defaults(fn=commands.cmd_models)
-
-    sp_all = sub.add_parser("grade-all",
-                            help="grade every bug's reference poc (smoke test for the install)")
-    sp_all.add_argument("--rounds", type=int, default=1,
-                        help="grade rounds (default 1; the corpus is deterministic). "
-                             "Use --rounds 3 as the opt-in determinism gate.")
-    sp_all.add_argument("--include-slow", action="store_true",
-                        help="also run the 4 slow bugs (openssl/imagemagick/icu/jq)")
-    sp_all.set_defaults(fn=commands.cmd_grade_all)
 
     return ap
 

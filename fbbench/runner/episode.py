@@ -25,7 +25,7 @@ _REFUSAL_STOPS = {"refusal", "content_filter", "safety", "prohibited_content",
                   "blocklist", "recitation", "image_safety"}
 
 # The submission/grading tool. The server advertises it as `run_input` and keeps
-# `grade`/`verify_poc` as hidden aliases (tools/mcp-server/main.go), so the model
+# `grade`/`verify_poc` as hidden aliases (in the oracle's mcp-server), so the model
 # only ever calls `run_input`. Scoring MUST match the same family, or a correct
 # solve submitted via the advertised name is silently scored 0 (and, under
 # reveal, the oracle verdict leaks back to the model instead of harness_output).
@@ -92,7 +92,7 @@ def neutral_tools(mcp: MCPClient) -> list[dict]:
     server's own list (and from the Codex arm, which reads the server directly).
     Querying the one canonical source keeps the schemas identical across BOTH
     arms and every model. The server's tools/list is a static function over the
-    pinned bin/mcp-server, so this stays deterministic / reproducible. The only
+    mcp-server pinned in the challenge image, so this stays deterministic. The only
     transform is the inputSchema -> input_schema key the backends expect.
     """
     return [{"name": t["name"], "description": t["description"],
@@ -118,18 +118,16 @@ def run_episode(
     bug_id: str,
     bug_dir: str,
     workspace: str,
-    server_bin: str,
+    image: str,
     max_turns: int = 300,
     episode_log: str | None = None,
     oracle_dir: str | None = None,
     capability_set: list[str] | None = None,
     pocs_dir: str | None = None,
     stop_on_solve: bool = True,
-    full_scan: bool = False,
-    image: str | None = None,
+    mode: str = "full-scan",
 ) -> EpisodeResult:
-    mcp = MCPClient(server_bin, bug_dir=bug_dir, workspace=workspace,
-                    oracle_dir=oracle_dir, image=image)
+    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
     mcp.initialize()
     kb: set[str] = set(capability_set or DEFAULT_KB)
     poc_root: Path | None = Path(pocs_dir) if pocs_dir else None
@@ -143,10 +141,16 @@ def run_episode(
     # Read the sanitizer from the LOCAL bundle: in the canonical path bug_dir is a
     # container path ("/src"); the host-side bug bundle is oracle_dir.
     backfill_sanitizer(setup_resp, oracle_dir or bug_dir)
-    # setup() no longer ships a task/description field — the task is conveyed by
-    # the system prompt — so no bug description is read here (full-scan is blind).
-    user_text = build_initial_user_message("", setup_resp, full_scan=full_scan)
-    sysp = system_prompt(full_scan=full_scan)
+    # The mode selects only the FIRST user turn; the system prompt is the same
+    # (blind) text for every mode. full-scan is the one active public mode;
+    # diffscan (delta-N) is a reserved extension point (see prompts.py).
+    if mode == "full-scan":
+        user_text = build_initial_user_message(setup_resp)
+    elif mode == "diffscan":
+        raise NotImplementedError("diff-scan (delta-N) mode is not implemented")
+    else:
+        raise ValueError(f"unknown mode: {mode!r} (expected full-scan | diffscan)")
+    sysp = system_prompt()
 
     messages: list[dict] = [{"role": "user", "content": user_text}]
     tools = neutral_tools(mcp)
