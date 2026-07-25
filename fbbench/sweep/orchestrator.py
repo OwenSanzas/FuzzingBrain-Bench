@@ -75,9 +75,9 @@ def bug_kb(bug: str) -> list[str]:
 
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
-             preserve_pocs: bool = True, full_scan: bool = True,
-             stop_on_solve: bool = True, api_key: str | None = None,
-             image_prefix: str | None = None, runner: list[str] | None = None) -> list[str]:
+             preserve_pocs: bool = True, stop_on_solve: bool = True,
+             api_key: str | None = None, image_prefix: str | None = None,
+             runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
     truth so the single and multi paths forward the SAME per-cell flags."""
     cmd = (runner or RUNNER) + ["--bug", bug, "--model", model,
@@ -85,8 +85,6 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
     if not stop_on_solve:
         cmd.append("--no-stop-on-solve")
-    if full_scan:
-        cmd.append("--full-scan")
     if api_key:
         cmd += ["--api-key", api_key]
     if image_prefix:
@@ -95,12 +93,12 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
 
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
-             timeout: int, preserve_pocs: bool = True, full_scan: bool = True,
-             *, stop_on_solve: bool = True, api_key: str | None = None,
+             timeout: int, preserve_pocs: bool = True, *,
+             stop_on_solve: bool = True, api_key: str | None = None,
              image_prefix: str | None = None, runner: list[str] | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
     cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
-                   full_scan=full_scan, stop_on_solve=stop_on_solve,
+                   stop_on_solve=stop_on_solve,
                    api_key=api_key, image_prefix=image_prefix, runner=runner)
     try:
         subprocess.run(cmd, cwd=REPO, timeout=timeout,
@@ -158,10 +156,9 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                output: str | None = None, max_turns: int = 100, timeout: int = 1800,
                jobs: int = 1, dashboard_pref: bool | None = None,
-               preserve_pocs: bool = True, full_scan: bool = True,
-               stop_on_solve: bool = True, api_key: str | None = None,
-               image_prefix: str | None = None, report_only: bool = False,
-               runner: list[str] | None = None) -> int:
+               preserve_pocs: bool = True, stop_on_solve: bool = True,
+               api_key: str | None = None, image_prefix: str | None = None,
+               report_only: bool = False, runner: list[str] | None = None) -> int:
     """THE engine: run the (models x bugs x samples) matrix. One code path for
     both a single cell (len 1) and a full sweep (len N) — a single run is just a
     matrix of size one. `fb-bench run` and the module __main__ both call this."""
@@ -187,14 +184,12 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     console = Console()
     use_dash = dashboard_pref if dashboard_pref is not None else console.is_terminal
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
-                     max_turns=max_turns, full_scan=full_scan,
-                     total=len(cells), already_done=done)
+                     max_turns=max_turns, total=len(cells), already_done=done)
 
     def _cell(model, bug, sample):
         return run_cell(model, bug, sample, max_turns, out, timeout,
-                        preserve_pocs=preserve_pocs, full_scan=full_scan,
-                        stop_on_solve=stop_on_solve, api_key=api_key,
-                        image_prefix=image_prefix, runner=runner)
+                        preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
+                        api_key=api_key, image_prefix=image_prefix, runner=runner)
 
     jobs = max(1, jobs)
     t0 = time.time()
@@ -235,7 +230,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
                     cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
-                                   full_scan=full_scan, stop_on_solve=stop_on_solve,
+                                   stop_on_solve=stop_on_solve,
                                    api_key=api_key, image_prefix=image_prefix, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
@@ -269,7 +264,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     try:
         from fbbench.report import write_summary
         idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=seeds,
-                            max_turns=max_turns, full_scan=full_scan, elapsed_s=elapsed)
+                            max_turns=max_turns, elapsed_s=elapsed)
         print(f"  summary: {idx}")
     except Exception as e:  # noqa: BLE001
         print(f"  (summary generation skipped: {e})")

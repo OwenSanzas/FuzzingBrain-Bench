@@ -92,7 +92,7 @@ def neutral_tools(mcp: MCPClient) -> list[dict]:
     server's own list (and from the Codex arm, which reads the server directly).
     Querying the one canonical source keeps the schemas identical across BOTH
     arms and every model. The server's tools/list is a static function over the
-    pinned bin/mcp-server, so this stays deterministic / reproducible. The only
+    mcp-server pinned in the challenge image, so this stays deterministic. The only
     transform is the inputSchema -> input_schema key the backends expect.
     """
     return [{"name": t["name"], "description": t["description"],
@@ -125,7 +125,6 @@ def run_episode(
     capability_set: list[str] | None = None,
     pocs_dir: str | None = None,
     stop_on_solve: bool = True,
-    full_scan: bool = False,
 ) -> EpisodeResult:
     mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
     mcp.initialize()
@@ -143,8 +142,8 @@ def run_episode(
     backfill_sanitizer(setup_resp, oracle_dir or bug_dir)
     # setup() no longer ships a task/description field — the task is conveyed by
     # the system prompt — so no bug description is read here (full-scan is blind).
-    user_text = build_initial_user_message("", setup_resp, full_scan=full_scan)
-    sysp = system_prompt(full_scan=full_scan)
+    user_text = build_initial_user_message(setup_resp)
+    sysp = system_prompt()
 
     messages: list[dict] = [{"role": "user", "content": user_text}]
     tools = neutral_tools(mcp)

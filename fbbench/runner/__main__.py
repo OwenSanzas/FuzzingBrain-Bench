@@ -43,7 +43,7 @@ def main() -> int:
     ap.add_argument("--bug", help="challenge alias (e.g. net-snmp-02)")
     ap.add_argument("--model", default="claude-opus-4-7", help="model id (claude*/gpt*/gemini*)")
     ap.add_argument("--max-turns", type=int, default=100,
-                    help="turn budget per episode (default 100 for full-scan; diff-scan uses 50)")
+                    help="turn budget per episode (default 100)")
     ap.add_argument("--output", default="output", help="output root (legacy nesting <output>/<bug>/<model>/)")
     ap.add_argument("--out-dir", default=None,
                     help="literal output dir; takes precedence over --output")
@@ -55,12 +55,9 @@ def main() -> int:
                          "(default on; --no-stop-on-solve lets the agent keep hunting "
                          "for more crashes until it stops (ASSESSMENT COMPLETE) or "
                          "--max-turns)")
-    # The public benchmark is ALWAYS blind (full-scan): the bug description is
-    # withheld and the agent must discover a crashing input. Normal (hinted) mode
-    # is removed from the public repo — it exists only in the private answers repo.
-    # `--full-scan` is kept as an accepted no-op (callers/orchestrator pass it).
-    ap.add_argument("--full-scan", action="store_true", default=True,
-                    help=argparse.SUPPRESS)
+    # The benchmark is ALWAYS blind: the bug description is withheld and the agent
+    # must discover a crashing input from the harness + source alone. There is no
+    # other mode.
     ap.add_argument("--repo-root", default=None,
                     help="benchmark repo root (default: auto-detected)")
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
@@ -112,7 +109,6 @@ def main() -> int:
         capability_set=capability_set(bug_dir),
         pocs_dir=str(pocs_dir) if pocs_dir else None,
         stop_on_solve=args.stop_on_solve,
-        full_scan=args.full_scan,
     )
 
     score = {
@@ -121,9 +117,8 @@ def main() -> int:
         # Every run knob that shaped this episode — surfaced verbatim in the
         # report so a result is fully reproducible from its own score.json.
         "config": {
-            "mode": "full-scan" if args.full_scan else "normal",
+            "mode": "blind",
             "max_turns": args.max_turns,
-            "full_scan": bool(args.full_scan),
             "stop_on_solve": bool(args.stop_on_solve),
             "preserve_pocs": bool(args.preserve_pocs),
             "grading": "remote-oracle",

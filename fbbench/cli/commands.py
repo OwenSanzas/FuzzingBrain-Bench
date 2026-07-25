@@ -1,10 +1,9 @@
-"""The fb-bench subcommands: list, show, grade, grade-all, run, traj, models."""
+"""The fb-bench subcommands: list, show, grade, run, traj, report, models."""
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from fbbench.cli.console import (
@@ -238,7 +237,6 @@ def cmd_run(args) -> int:
         max_turns=args.max_turns, timeout=args.timeout, jobs=args.jobs,
         dashboard_pref=getattr(args, "dashboard", None),
         preserve_pocs=args.preserve_pocs,
-        full_scan=getattr(args, "full_scan", True),
         stop_on_solve=getattr(args, "stop_on_solve", True),
         api_key=args.api_key,
         image_prefix=getattr(args, "image_prefix", None),
@@ -274,7 +272,7 @@ def cmd_report(args) -> int:
 
 def cmd_traj(args) -> int:
     """Pretty-print the tool-call trajectory of a finished run dir."""
-    from fbbench.runner.traj import build_traj, render_text, write_traj
+    from fbbench.runner.traj import build_traj, write_traj
 
     d = Path(args.run_dir)
     tr = d / "transcript.jsonl"

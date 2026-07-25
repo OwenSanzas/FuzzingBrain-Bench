@@ -17,7 +17,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 from fbbench.grading import find_bug
 from fbbench.paths import REPO as _REPO

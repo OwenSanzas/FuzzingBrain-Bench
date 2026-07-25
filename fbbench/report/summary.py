@@ -75,8 +75,7 @@ def _scan_dimensions(exp_dir: Path) -> tuple[list[str], list[str], list[int]]:
 def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                   models: list[str] | None = None, bugs: list[str] | None = None,
                   samples: list[int] | None = None, max_turns: int = 0,
-                  full_scan: bool = False, total_cost: float | None = None,
-                  elapsed_s: float = 0.0) -> dict:
+                  total_cost: float | None = None, elapsed_s: float = 0.0) -> dict:
     exp_dir = Path(exp_dir)
     s_bugs, s_models, s_samples = _scan_dimensions(exp_dir)
     bugs = bugs or s_bugs
@@ -111,8 +110,7 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                     "caps": caps,
                     "solved": _solved(sc),
                     "cost": cost,
-                    "mode": cfg.get("mode") or sc.get("mode")
-                            or ("full-scan" if sc.get("full_scan") else "normal"),
+                    "mode": cfg.get("mode") or sc.get("mode") or "blind",
                     "reason": sc.get("terminated_reason", ""),
                     "report": (str(report.relative_to(exp_dir)) if report.is_file() else ""),
                 })
@@ -125,9 +123,8 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         return next(iter(vals)) if len(vals) == 1 else "mixed"
 
     config = {
-        "mode": _agree("mode", "full-scan" if full_scan else "normal"),
+        "mode": _agree("mode", "blind"),
         "max_turns": _agree("max_turns", max_turns),
-        "full_scan": _agree("full_scan", full_scan),
         "stop_on_solve": _agree("stop_on_solve"),
         "preserve_pocs": _agree("preserve_pocs"),
         "grading": _agree("grading", "remote-oracle"),
@@ -139,7 +136,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "bugs": bugs,
         "samples": samples,
         "max_turns": max_turns,
-        "full_scan": full_scan,
         "config": config,
         "total_cost": total_cost if total_cost is not None else cost_sum,
         "elapsed_s": elapsed_s,

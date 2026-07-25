@@ -91,7 +91,7 @@ def list_bugs(repo: Path = REPO, include_inactive: bool = False) -> list[tuple[s
     """Active shippable bugs: (bug_id, dir) with bench.yaml + binaries/.
 
     Parked bugs (vuln.yaml `active: false`) are skipped unless include_inactive,
-    so list / grade-all / sweep only ever touch the active corpus.
+    so list / grade / run only ever touch the active corpus.
     """
     subs = [
         sub

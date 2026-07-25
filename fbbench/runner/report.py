@@ -92,7 +92,7 @@ def _config_rows(score: dict, kb: list[str], max_turns_fallback) -> list[tuple[s
     cfg = score.get("config") or {}
     rows: list[tuple[str, str]] = []
 
-    mode = cfg.get("mode") or score.get("mode") or ("full-scan" if score.get("full_scan") else "normal")
+    mode = cfg.get("mode") or score.get("mode") or "blind"
     rows.append(("mode", mode))
 
     diff_level = cfg.get("diff_level", score.get("diff_level"))
@@ -326,7 +326,7 @@ def build_report_html(run_dir: Path) -> str:
     cache_r = cost.get("cache_read_tokens", 0)
 
     cfg = score.get("config") or {}
-    mode = cfg.get("mode") or score.get("mode") or ("full-scan" if score.get("full_scan") else "normal")
+    mode = cfg.get("mode") or score.get("mode") or "blind"
     tags = []
     if language:
         tags.append(language)
