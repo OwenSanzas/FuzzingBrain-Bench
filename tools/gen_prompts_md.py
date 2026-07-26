@@ -41,7 +41,7 @@ _TOOL_RETURNS = {
     "exec": ["stdout", "stderr", "exit_code", "duration_ms",
              "truncated{stdout, stderr}"],
     "list_directory": ["path", "entries[{name, type, size}]"],
-    "read_file": ["content", "total_bytes", "truncated"],
+    "read_file": ["content (cat -n)", "total_lines", "truncated"],
     "write_file": ["bytes_written"],
     "run_poc_on_harness": ["harness_output{stdout, stderr, exit_code, signal}",
                            "duration_ms"],
