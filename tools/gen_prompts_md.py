@@ -28,6 +28,25 @@ _OUT = Path(__file__).resolve().parents[1] / "docs" / "PROMPTS.md"
 _DEFAULT_IMAGE = os.environ.get(
     "FBBENCH_IMAGE_PREFIX", "docker.io/osanzas/fbbench-challenge-") + "avro-03"
 
+# Tool return shapes, EXTRACTED from real tool calls (the 6 tools are fixed).
+# The MCP tool-call protocol carries no output schema to the model, and our
+# server declares none, so there is nothing to pull live for returns — we record
+# the observed shape here for the doc. Re-extract with a real run if a tool's
+# return changes. (run_poc_on_harness is the agent-facing SEALED shape — the
+# grading verdict is stripped before the model sees it.)
+_TOOL_RETURNS = {
+    "setup": ["project", "language",
+              "harness{type, entrypoint, invocation, sanitizer}",
+              "workspace_path", "bug_dir", "notes"],
+    "exec": ["stdout", "stderr", "exit_code", "duration_ms",
+             "truncated{stdout, stderr}"],
+    "list_directory": ["path", "entries[{name, type, size}]"],
+    "read_file": ["content", "total_bytes", "truncated"],
+    "write_file": ["bytes_written"],
+    "run_poc_on_harness": ["harness_output{stdout, stderr, exit_code, signal}",
+                           "duration_ms"],
+}
+
 _HEADER = (
     "# FuzzingBrain-Bench — model-facing prompts\n\n"
     "**Auto-generated from `fbbench/prompts.py` by `tools/gen_prompts_md.py`. "
@@ -91,9 +110,20 @@ def _render_tools(out: list[str], tools: list[dict], image: str) -> None:
             for pname, pdef in props.items():
                 typ = (pdef or {}).get("type", "?")
                 req = "required" if pname in required else "optional"
-                out.append(f"    - `{pname}` ({typ}, {req})")
+                line = f"    - `{pname}` ({typ}, {req})"
+                if (pdef or {}).get("description"):
+                    line += f" — {pdef['description']}"
+                out.append(line)
         else:
             out.append("- **Parameters**: none")
+        # Returns: the MCP tool-call model has no output schema that reaches the
+        # model, and our server declares none — so the return shape is extracted
+        # from a real run and recorded below (the tools are fixed). Re-extract if a
+        # tool's return changes. The agent itself learns returns from the actual
+        # result + the description text.
+        rets = _TOOL_RETURNS.get(t.get("name"))
+        out.append("- **Returns**: " + (", ".join(f"`{r}`" for r in rets)
+                                        if rets else "(not documented)"))
         out.append("\n```json\n" + json.dumps(t, indent=2, ensure_ascii=False) + "\n```\n")
 
 
