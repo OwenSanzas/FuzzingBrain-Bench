@@ -69,7 +69,7 @@ class Cell:
     turn: int = 0                   # current/last turn (1-based)
     max_turns: int = 0
     tool: str = ""                  # tool of the most recent tool_result
-    grades: int = 0                 # number of grade() calls so far
+    grades: int = 0                 # number of run_poc_on_harness() calls so far
     kb: list[str] = field(default_factory=list)   # capability_set (applicable flags)
     caps: dict[str, str] = field(default_factory=dict)  # flag -> fired/not_fired/n-a
     solved_val: bool | None = None  # authoritative solve (score.solved); None = unknown

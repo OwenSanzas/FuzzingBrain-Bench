@@ -12,7 +12,7 @@ ground-truth binaries.
   │  src@vuln_commit + harness + bench.yaml*   │        │  binaries + expected.yaml │
   │  + mcp-server client                       │        │  + poc  (the answer key)  │
   │  agent reads source, crafts an input,      │        │                           │
-  │  calls grade() ───────────────────────────┼─ POST ─┤  runs the harness oracle, │
+  │  calls run_poc_on_harness() ───────────────────────────┼─ POST ─┤  runs the harness oracle, │
   │                          ◄─── verdict ─────┼────────┤  returns ONLY the verdict │
   └────────────────────────────────────────────┘        └───────────────────────────┘
         * bench.yaml is scrubbed: no fix_commit / fix_patch
@@ -38,7 +38,7 @@ in the image (upstream `src/` is exempt — public OSS may carry `*.bin` fixture
 ```bash
 # oracle-root/<bug>/ holds each bug's answer bundle (binaries + expected.yaml + poc)
 mcp-server -grade-server :8077 -oracle-root tools/sealed/oracle-root
-# POST /grade?bug=<id> with the candidate bytes -> JSON capability verdict
+# POST /run_poc_on_harness?bug=<id> with the candidate bytes -> JSON capability verdict
 ```
 The oracle root and its bundles are **gitignored** — they never enter the public repo.
 
@@ -51,7 +51,7 @@ challenge ids is in [CHALLENGES.md](CHALLENGES.md).
 docker pull docker.io/osanzas/fbbench-challenge-dtc-01:latest      # answer-free
 docker run -it docker.io/osanzas/fbbench-challenge-dtc-01:latest
 # inside /challenge: read src/ + harness/, craft an input, and your agent drives
-# the mcp-server over stdio (setup/read/list/write/exec/grade). grade() POSTs the
+# the mcp-server over stdio (setup/read/list/write/exec/run_poc_on_harness). run_poc_on_harness() POSTs the
 # candidate to BENCH_GRADE_URL (the remote oracle) and returns ONLY the capability
 # verdict {reach,crash,differential,class,site} — no answer key is ever on this host.
 ```
@@ -71,7 +71,7 @@ reported scores are reproducible — there is no separate "local" eval that coul
 export ANTHROPIC_API_KEY=sk-ant-...        # or OPENAI_API_KEY / GEMINI_API_KEY
 ./fb-bench run dtc-01 --model claude-opus-4-7 --max-turns 300
 #  -> pulls docker.io/osanzas/fbbench-challenge-dtc-01:latest (answer-free)
-#  -> agent reads src/+harness, crafts inputs, grade() hits the remote oracle
+#  -> agent reads src/+harness, crafts inputs, run_poc_on_harness() hits the remote oracle
 #  -> writes runs/<exp>/<bug>/<model>/run-N/{score.json,episode.jsonl,traj.md}
 ```
 

@@ -4,7 +4,7 @@
 result). For quickly seeing *what the agent did* — which tools, in what order,
 with what outcome, and where it crashed — that is too verbose. `build_traj`
 reduces it to one node per tool call: turn, tool, a one-line argument summary, a
-one-line result summary, and a `crash` flag for grade() calls that faulted.
+one-line result summary, and a `crash` flag for run_poc_on_harness() calls that faulted.
 
 The runner writes this as `traj.jsonl` (one node per line, script-friendly) and
 `traj.md` (a readable table) next to the episode; `fb-bench traj <run-dir>`
@@ -21,7 +21,7 @@ from pathlib import Path
 # trajectory's grade-call / fault counts aren't silently zero.
 GRADE_TOOLS = frozenset({"run_poc_on_harness"})
 
-# Markers in a grade()'s raw harness stderr that mean "this input faulted".
+# Markers in a run_poc_on_harness()'s raw harness stderr that mean "this input faulted".
 _CRASH_RE = re.compile(
     r"AddressSanitizer|UndefinedBehaviorSanitizer|LeakSanitizer|MemorySanitizer|"
     r"runtime error:|libFuzzer: (?:out-of-memory|timeout|deadly signal)|"
@@ -120,7 +120,7 @@ def render_md(nodes: list[dict], header: str = "") -> str:
     out = [f"# Trajectory — {header}".rstrip(" —"), ""]
     grades = [n for n in nodes if n["tool"] in GRADE_TOOLS]
     hits = [n for n in grades if n["crash"]]
-    out.append(f"{len(nodes)} tool calls · {len(grades)} grade() calls · "
+    out.append(f"{len(nodes)} tool calls · {len(grades)} run_poc_on_harness() calls · "
                f"{len(hits)} faulted"
                + (f" (first at call #{hits[0]['n']}, turn {hits[0]['turn']})" if hits else ""))
     out.append("")

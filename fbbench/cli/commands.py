@@ -326,7 +326,7 @@ def cmd_traj(args) -> int:
     grades = [n for n in nodes if n["tool"] in GRADE_TOOLS]
     hits = [n for n in grades if n["crash"]]
     print()
-    print(bold(f"  {len(nodes)} tool calls · {len(grades)} grade() · "
+    print(bold(f"  {len(nodes)} tool calls · {len(grades)} run_poc_on_harness() · "
                + (green(f"{len(hits)} faulted") if hits else dim("0 faulted"))))
     print()
     for n in nodes:

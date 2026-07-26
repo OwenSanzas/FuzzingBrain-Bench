@@ -10,7 +10,7 @@ GitHub-dark style of the AGF reports:
 * the capability ladder (reach -> crash -> differential -> class -> site),
 * cards for token / cost breakdown, per-tool call counts, and run metadata,
 * the full trajectory table (every tool call, its argument and result, with
-  the grade() calls and the faulting call highlighted).
+  the run_poc_on_harness() calls and the faulting call highlighted).
 
 Everything the report shows is answer-free: it is the record of what the agent
 did, which never includes the oracle's PoC / expected fault / location.
@@ -533,7 +533,7 @@ reproducible from these parameters alone.</div>
     <table class="mini">
       <tr><td>terminated</td><td class="r">{reason}</td></tr>
       <tr><td>duration</td><td class="r">{dur}s</td></tr>
-      <tr><td>grade() calls</td><td class="r">{ngrades}</td></tr>
+      <tr><td>run_poc_on_harness() calls</td><td class="r">{ngrades}</td></tr>
       <tr><td>faulting grades</td><td class="r">{nfaults}</td></tr>
       <tr><td>refusal retries</td><td class="r">{refus}</td></tr>
       <tr><td>malformed retries</td><td class="r">{malf}</td></tr>

@@ -34,7 +34,7 @@ def grade_blob(bug_dir: Path, blob: Path, rounds: int = 1,
     grade_url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
     data = Path(blob).read_bytes()
     req = urllib.request.Request(
-        f"{grade_url}/run_poc_on_harness?bug={bug_id}", data=data, method="POST",
+        f"{grade_url}/grade?bug={bug_id}", data=data, method="POST",
         headers={"Content-Type": "application/octet-stream",
                  # Skip ngrok's browser interstitial so the JSON comes back clean.
                  "ngrok-skip-browser-warning": "true"})

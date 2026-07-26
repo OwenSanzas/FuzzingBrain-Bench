@@ -9,7 +9,7 @@ challenge image's own mcp-server over stdio — `docker run -i <image> mcp-serve
 Per bug it asserts the four user-required properties:
   1. no errors            — initialize/setup succeed; the container speaks MCP
   2. normal operation     — read_file/list_directory/write_file/exec all work;
-                            grade() fires the full capability set K_b
+                            run_poc_on_harness() fires the full capability set K_b
   3. answers don't leak   — no poc/grader/binaries/expected.yaml reachable (via
                             mcp list/read AND a real in-container `find`); the
                             scrubbed bench.yaml carries no upstream/fix provenance
@@ -114,7 +114,7 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
                                   "content": base64.b64encode(poc).decode()})
             d = m.call("exec", {"cmd": "base64 -d /workspace/poc.b64 > /workspace/poc.bin"})
             ok("poc_decoded", isinstance(d, dict) and d.get("exit_code") == 0, repr(d)[:120])
-            v = m.call("grade", {"path": "/workspace/poc.bin"})
+            v = m.call("run_poc_on_harness", {"path": "/workspace/poc.bin"})
             caps = v.get("capabilities", {}) if isinstance(v, dict) else {}
             fired = {k for k, vv in caps.items() if vv == "fired"}
             res["fired"] = sorted(fired)
