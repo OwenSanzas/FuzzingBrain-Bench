@@ -24,12 +24,11 @@ from fbbench.runner.mcp_client import MCPClient, MCPToolError
 _REFUSAL_STOPS = {"refusal", "content_filter", "safety", "prohibited_content",
                   "blocklist", "recitation", "image_safety"}
 
-# The submission/grading tool. The server advertises it as `run_input` and keeps
-# `grade`/`verify_poc` as hidden aliases (in the oracle's mcp-server), so the model
-# only ever calls `run_input`. Scoring MUST match the same family, or a correct
-# solve submitted via the advertised name is silently scored 0 (and, under
-# reveal, the oracle verdict leaks back to the model instead of harness_output).
-_GRADE_TOOLS = {"grade", "run_input", "verify_poc"}
+# The submission tool: the agent runs a candidate through the sanitizer harness
+# via `run_poc_on_harness` (the sole name — no aliases). Scoring MUST match this
+# name, or a correct solve is silently scored 0 (and, under reveal, the oracle
+# verdict would leak back to the model instead of harness_output).
+_GRADE_TOOLS = {"run_poc_on_harness"}
 
 
 def _is_refusal(comp: Completion) -> bool:

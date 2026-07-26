@@ -49,7 +49,7 @@ class MCPClient:
         # seccomp=unconfined lets the in-container mcp-server create the user+network
         # namespace exec() isolation needs (default Docker seccomp blocks
         # unshare(CLONE_NEWUSER)). exec'd children still get `-n` (no network — they
-        # cannot brute-force the remote oracle); the server's own grade() call keeps
+        # cannot brute-force the remote oracle); the server's own run_poc_on_harness() call keeps
         # the container's network. The container is ephemeral and answer-free, so
         # this leaks nothing. BENCH_GRADE_REVEAL=1 marks the TRUSTED runner: the
         # in-image mcp-server returns the verdict so the runner can score, then

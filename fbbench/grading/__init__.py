@@ -1,4 +1,4 @@
-"""Deterministic grade() oracle + bench.yaml reading, usable without an LLM."""
+"""Deterministic run_poc_on_harness() oracle + bench.yaml reading, usable without an LLM."""
 from fbbench.grading.bench_yaml import (
     DEFAULT_KB, capability_set, find_bug, is_active, list_bugs, read_bench,
 )
