@@ -53,10 +53,9 @@ satisfied `K_b` (pass `--no-preserve-pocs` to drop them):
 
 ## What the runner does NOT do (v1)
 
-- No multi-process parallelism across bugs (use `python -m fbbench.sweep.orchestrator`
-  or drive multiple `./fb-bench run` calls with `xargs -P`).
+- No multi-process parallelism across bugs (use `fb-bench run <bugs> --jobs N`).
 - No coaching / Stuck-nudges (v2 adaptive arm).
-- No vendor-CLI shim (see the Codex CLI arm in `python -m fbbench.sweep.codex`).
+- No vendor-CLI shim (see the Codex / Claude-Code arms via `fb-bench run --arm codex|claudecode`).
 - No Docker isolation — the MCP server is a host subprocess. This means
   agent `exec` commands run as the runner's UID. Run on a throwaway VM.
 

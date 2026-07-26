@@ -191,37 +191,73 @@ def cmd_run(args) -> int:
     from fbbench.sweep.orchestrator import run_matrix, resolve_models, resolve_bugs
 
     env_combined = {**read_dotenv(), **os.environ}
+    arm = getattr(args, "arm", "api")
+    auth = getattr(args, "auth", None)   # None => auto (prefer api, else sub)
+    model_map: dict[str, str] | None = None
+    api_key = args.api_key
 
-    # ---- resolve model(s): one | csv | sweep | all (or auto-detect one) ---
-    if args.model is None:
-        provider, have = detect_provider()
-        if provider is None:
-            sys.exit(red(
-                "  no provider API key found.\n"
-                "  put one into ./.env (or export it):\n"
-                "    ANTHROPIC_API_KEY=sk-ant-...   # claude-* models\n"
-                "    OPENAI_API_KEY=sk-...          # gpt-* models\n"
-                "    GEMINI_API_KEY=...             # gemini-* models\n"
-                "    DEEPSEEK_API_KEY=sk-...        # deepseek-* models\n"
-                "  see `./fb-bench models` for the full list."))
-        models = [PROVIDER_DEFAULT[provider]]
-        print(dim(f"  no --model given; using {models[0]} "
-                  f"(detected {PROVIDER_KEY_ENV[provider]} in .env)"))
-    else:
-        models = resolve_models(args.model)
-        # Validate the key only for the common single-concrete-model case; a
-        # lineup (sweep/all/csv) lets each cell surface its own missing-key error.
-        if len(models) == 1:
-            provider = route_provider(models[0])
-            if provider == "unknown":
-                sys.exit(red(f"  cannot route model {models[0]!r} to a provider "
-                             "(expected claude*/gpt*/gemini*)"))
-            if (needs_key(provider) and not args.api_key
-                    and not env_combined.get(PROVIDER_KEY_ENV[provider])):
+    # ---- resolve model(s) per arm. The cell label (dir name) is what goes in
+    # `models`; model_map recovers the raw model id an arm needs to execute. ---
+    if arm == "codex":
+        from fbbench.sweep import codex
+        raw_models = ([m.strip() for m in args.model.split(",") if m.strip()]
+                      if args.model else [codex.MODEL_DEFAULT])
+        models = [codex.model_label(m) for m in raw_models]
+        model_map = {codex.model_label(m): m for m in raw_models}
+    elif arm == "claudecode":
+        from fbbench.sweep import claudecode
+        raw_models = ([m.strip() for m in args.model.split(",") if m.strip()]
+                      if args.model else [claudecode.MODEL_DEFAULT])
+        models = [claudecode.model_label(m) for m in raw_models]
+        model_map = {claudecode.model_label(m): m for m in raw_models}
+    else:  # api arm — a provider model driven via its API
+        if args.model is None:
+            provider, have = detect_provider()
+            if provider is None:
                 sys.exit(red(
-                    f"  model {models[0]!r} needs ${PROVIDER_KEY_ENV[provider]} "
-                    f"but it is not set in ./.env or env.\n"
-                    f"  add it to ./.env or pass --api-key."))
+                    "  no provider API key found.\n"
+                    "  put one into ./.env (or export it):\n"
+                    "    ANTHROPIC_API_KEY=sk-ant-...   # claude-* models\n"
+                    "    OPENAI_API_KEY=sk-...          # gpt-* models\n"
+                    "    GEMINI_API_KEY=...             # gemini-* models\n"
+                    "    DEEPSEEK_API_KEY=sk-...        # deepseek-* models\n"
+                    "  see `./fb-bench models` for the full list."))
+            models = [PROVIDER_DEFAULT[provider]]
+            print(dim(f"  no --model given; using {models[0]} "
+                      f"(detected {PROVIDER_KEY_ENV[provider]} in .env)"))
+        else:
+            models = resolve_models(args.model)
+            # Validate the key only for the common single-concrete-model case; a
+            # lineup (sweep/all/csv) lets each cell surface its own missing-key error.
+            if len(models) == 1:
+                provider = route_provider(models[0])
+                if provider == "unknown":
+                    sys.exit(red(f"  cannot route model {models[0]!r} to a provider "
+                                 "(expected claude*/gpt*/gemini*)"))
+                if (needs_key(provider) and not args.api_key
+                        and not env_combined.get(PROVIDER_KEY_ENV[provider])):
+                    sys.exit(red(
+                        f"  model {models[0]!r} needs ${PROVIDER_KEY_ENV[provider]} "
+                        f"but it is not set in ./.env or env.\n"
+                        f"  add it to ./.env or pass --api-key."))
+
+    # ---- resolve auth for the vendor arms: prefer api (the provider API key),
+    # fall back to sub. Explicit --auth is honoured. ---
+    if arm in ("codex", "claudecode"):
+        key_env = "OPENAI_API_KEY" if arm == "codex" else "ANTHROPIC_API_KEY"
+        have_key = bool(api_key or env_combined.get(key_env))
+        if auth is None:
+            auth = "api" if have_key else "sub"
+            reason = f"{key_env} present" if have_key else f"no {key_env} → subscription sign-in"
+            print(dim(f"  --auth not set → {auth} ({reason})"))
+        if auth == "api":
+            api_key = api_key or env_combined.get(key_env)
+            # claudecode authenticates ONLY via the env key, so it must be present.
+            # codex can also use a `codex login --with-api-key` auth.json, so a
+            # missing env key there is not fatal — it falls through to that login.
+            if arm == "claudecode" and not api_key:
+                sys.exit(red("  --arm claudecode --auth api needs ANTHROPIC_API_KEY "
+                             "in ./.env or --api-key (or use --auth sub)"))
 
     # ---- resolve bug(s): one | csv | all (validates, exits on unknown) ----
     bugs = resolve_bugs(args.bugs)
@@ -238,10 +274,11 @@ def cmd_run(args) -> int:
         dashboard_pref=getattr(args, "dashboard", None),
         preserve_pocs=args.preserve_pocs,
         stop_on_solve=getattr(args, "stop_on_solve", True),
-        api_key=args.api_key,
+        api_key=api_key,
         image_prefix=getattr(args, "image_prefix", None),
         report_only=getattr(args, "report_only", False),
         runner=[runner_py, "-m", "fbbench.runner"],
+        arm=arm, auth=auth, model_map=model_map,
     )
 
 
