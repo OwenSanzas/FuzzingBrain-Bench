@@ -17,10 +17,9 @@ import json
 import re
 from pathlib import Path
 
-# The submission/grading tool is advertised as `run_input`; `grade`/`verify_poc`
-# are hidden aliases. Match all three so trajectory grade-call / fault counts
-# aren't silently zero (the server renamed grade() -> run_input).
-GRADE_TOOLS = frozenset({"grade", "run_input", "verify_poc"})
+# The submission tool is `run_poc_on_harness` (the sole name). Match it so the
+# trajectory's grade-call / fault counts aren't silently zero.
+GRADE_TOOLS = frozenset({"run_poc_on_harness"})
 
 # Markers in a grade()'s raw harness stderr that mean "this input faulted".
 _CRASH_RE = re.compile(

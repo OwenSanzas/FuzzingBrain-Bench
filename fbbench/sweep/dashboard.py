@@ -155,7 +155,7 @@ class SweepStatus:
                 c.turn = int(ev.get("turn", c.turn - 1)) + 1
             elif kind == "tool_result":
                 c.tool = ev.get("tool", c.tool)
-                if c.tool == "grade":
+                if c.tool == "run_poc_on_harness":
                     c.grades += 1
             elif kind == "end":
                 c.caps = ev.get("capabilities", c.caps)
@@ -492,7 +492,7 @@ def _preview(static: bool = False) -> None:
             STATUS.cell_start(m, b, 0, kb)
             for turn in range(0, 30, 3):
                 STATUS.feed_event(m, b, 0, {"event": "assistant", "turn": turn})
-                tool = ["list_directory", "read_file", "exec", "write_file", "grade"][turn % 5]
+                tool = ["list_directory", "read_file", "exec", "write_file", "run_poc_on_harness"][turn % 5]
                 STATUS.feed_event(m, b, 0, {"event": "tool_result", "turn": turn, "tool": tool})
                 time.sleep(0.05)
             STATUS.cell_finish(m, b, 0, outcome(i))

@@ -61,7 +61,7 @@ MAX_RESUMES = 30  # parity with the Codex arm's resume cap
 # a host-side cheat/contamination surface and is hard-denied below.
 _BENCH_TOOLS = ",".join(
     f"mcp__bench__{t}" for t in
-    ("setup", "list_directory", "read_file", "write_file", "exec", "grade"))
+    ("setup", "list_directory", "read_file", "write_file", "exec", "run_poc_on_harness"))
 # Exhaustive built-in denylist. `--allowedTools` is NOT exclusive (tools absent
 # from it can still run if they don't require a prompt — Skill/SlashCommand slip
 # through), so we ALSO name every built-in here. Audited: with this list an agent
@@ -241,7 +241,7 @@ def _run_claude_once(argv: list[str], lf, deadline: float,
             st["turns"] = len(msg_ids)
             for b in msg.get("content", []):
                 if (b.get("type") == "tool_use"
-                        and str(b.get("name", "")).endswith("__grade")):
+                        and str(b.get("name", "")).endswith("__run_poc_on_harness")):
                     grade_ids.add(b.get("id"))
             st["grade_calls"] = len(grade_ids)
         elif t == "result":
