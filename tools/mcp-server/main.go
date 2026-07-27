@@ -283,7 +283,7 @@ func toolSchemas() []map[string]any {
 		},
 		{
 			"name":        "read_file",
-			"description": "Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the oracle answer keys, return \"permission denied\". Returns content, total_lines, and truncated (true if more lines remain).",
+			"description": "Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the oracle answer keys, return \"permission denied\". Output is capped (2000 lines, 2000 chars/line, 128 KB total); returns content, total_lines, lines_shown, truncated, and next_offset — if truncated, read on with offset=next_offset.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

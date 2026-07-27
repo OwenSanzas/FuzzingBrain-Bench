@@ -25,9 +25,10 @@ type writeFileParams struct {
 }
 
 const (
-	defaultReadLines = 2000 // max lines returned when `limit` is unset (Claude Code parity)
-	maxLineChars     = 2000 // per-line char cap; longer lines are truncated with a marker
-	maxDirEntries    = 1000 // list_directory entry cap; a huge dir would blow the context
+	defaultReadLines = 2000        // max lines returned when `limit` is unset (Claude Code parity)
+	maxLineChars     = 2000        // per-line char cap; longer lines are truncated with a marker
+	maxReadBytes     = 128 * 1024  // total read_file output cap; lines x per-line could else hit ~4MB
+	maxDirEntries    = 1000        // list_directory entry cap; a huge dir would blow the context
 )
 
 var errPermissionDenied = errors.New("permission denied")
@@ -180,18 +181,34 @@ func (s *server) toolReadFile(args []byte) (any, error) {
 		end = total
 	}
 	var b strings.Builder
-	for i := start - 1; i >= 0 && i < end; i++ {
+	shown := 0
+	i := start - 1
+	for ; i >= 0 && i < end; i++ {
 		ln := lines[i]
 		if len(ln) > maxLineChars {
 			ln = ln[:maxLineChars] + "… [line truncated]"
 		}
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, ln)
+		shown++
+		// Total-output cap: 2000 lines x 2000 chars could otherwise reach ~4MB and
+		// blow the agent's context in a single call. Stop at the byte cap; the agent
+		// continues from next_offset via the offset/limit params.
+		if b.Len() >= maxReadBytes {
+			i++
+			break
+		}
 	}
-	return map[string]any{
+	// i is one past the last line included.
+	res := map[string]any{
 		"content":     b.String(),
 		"total_lines": total,
-		"truncated":   end < total,
-	}, nil
+		"lines_shown": shown,
+		"truncated":   i < total,
+	}
+	if i < total {
+		res["next_offset"] = i + 1 // 1-based line to resume from
+	}
+	return res, nil
 }
 
 func (s *server) toolWriteFile(args []byte) (any, error) {
