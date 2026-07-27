@@ -105,11 +105,13 @@ def _compact_history(messages: list[dict], *, keep_recent_turns: int,
     return reclaimed
 
 
-def _estimate_tokens(sysp: str, messages: list[dict]) -> int:
-    """Rough token estimate (chars/4) of what a complete() call will send: the
-    system prompt + every message's text / content / note / tool-result bodies /
-    tool-call args. Used ONLY as a pre-call overflow guard (the provider's exact
-    input_tokens stays authoritative for cost). Deliberately conservative."""
+# Cold-start tokens-per-char (chars/4) used only until we observe a real ratio.
+_COLD_START_TOKENS_PER_CHAR = 0.25
+
+
+def _measure_chars(sysp: str, messages: list[dict]) -> int:
+    """Total characters a complete() call will send: the system prompt + every
+    message's text / content / note / tool-result bodies / tool-call args."""
     chars = len(sysp or "")
     for m in messages:
         chars += len(m.get("text") or "") + len(m.get("content") or "") + len(m.get("note") or "")
@@ -117,10 +119,19 @@ def _estimate_tokens(sysp: str, messages: list[dict]) -> int:
             chars += len(r.content or "")
         for tc in m.get("tool_calls") or []:
             chars += len(json.dumps(getattr(tc, "input", None) or {}))
-    return chars // 4
+    return chars
 
 
-def _compact_to_fit(sysp: str, messages: list[dict], window: int) -> int:
+def _estimate_tokens(sysp: str, messages: list[dict], tokens_per_char: float) -> int:
+    """Pre-call token estimate = measured chars x a SELF-CALIBRATED tokens/char
+    ratio (from the provider's real input_tokens on the previous call — so it
+    tracks this model's actual tokenizer and even absorbs the tools-schema
+    overhead). Cold start uses chars/4. Guard-only; provider usage is authoritative."""
+    return int(_measure_chars(sysp, messages) * tokens_per_char)
+
+
+def _compact_to_fit(sysp: str, messages: list[dict], window: int,
+                    tokens_per_char: float) -> int:
     """Compact BEFORE sending so the about-to-send context fits with room for a
     reply. Escalates: first elide OLD large tool outputs (keep recent 4), then
     expose more (keep 1), then ALL turns (keep 0) — until the estimate fits or
@@ -131,7 +142,7 @@ def _compact_to_fit(sysp: str, messages: list[dict], window: int) -> int:
     target = min(_COMPACT_TRIGGER_FRAC * window, window - _COMPACT_OUTPUT_RESERVE)
     reclaimed = 0
     for keep in (_COMPACT_KEEP_RECENT_TURNS, 1, 0):
-        if _estimate_tokens(sysp, messages) <= target:
+        if _estimate_tokens(sysp, messages, tokens_per_char) <= target:
             break
         r = _compact_history(messages, keep_recent_turns=keep,
                              large_chars=_COMPACT_LARGE_CHARS)
@@ -294,18 +305,23 @@ def run_episode(
           "initial_user_message": user_text,
           "tools": tools})
 
+    # Self-calibrating tokens/char, updated from each call's real input_tokens so
+    # the pre-call estimate tracks THIS model's tokenizer (cold start = chars/4).
+    tpc = [_COLD_START_TOKENS_PER_CHAR]
+
     def complete_once() -> Completion:
         # Pre-call guard: compact BEFORE sending, so a turn that just appended a lot
         # (many/large tool results) cannot overflow the window on THIS call — the
-        # post-call exact count would be one step behind. Acts on an estimate of the
-        # about-to-send size and escalates until it fits (see _compact_to_fit).
+        # post-call exact count would be one step behind. Acts on a self-calibrated
+        # estimate of the about-to-send size and escalates until it fits.
         window = context_window(backend.model)
-        reclaimed = _compact_to_fit(sysp, messages, window)
+        reclaimed = _compact_to_fit(sysp, messages, window, tpc[0])
         if reclaimed:
-            est = _estimate_tokens(sysp, messages)
+            est = _estimate_tokens(sysp, messages, tpc[0])
             pct = round(100.0 * est / window, 1) if window else 0.0
             ev = {"event": "context_compaction", "turn": turn, "est_tokens": est,
                   "window": window, "pct_of_window": pct, "reclaimed_chars": reclaimed,
+                  "tokens_per_char": round(tpc[0], 4),
                   "msg": (f"context compaction (pre-call) - est/limit = "
                           f"{est}/{window} = {pct}%; reclaimed {reclaimed} chars")}
             log(ev)
@@ -326,6 +342,13 @@ def run_episode(
             log(ev)
             tlog(ev)
             c = backend.complete(sysp, messages, tools, max_tokens=65536)
+        # Calibrate: real prompt tokens / chars we actually sent (messages are
+        # unchanged until the caller appends), so the ratio absorbs formatting +
+        # tools-schema overhead the char count misses. Refresh only on real data.
+        sent_chars = _measure_chars(sysp, messages)
+        real_tokens = c.input_tokens + c.cache_read_tokens + c.cache_write_tokens
+        if sent_chars > 0 and real_tokens > 0:
+            tpc[0] = real_tokens / sent_chars
         result.input_tokens += c.input_tokens
         result.output_tokens += c.output_tokens
         result.cache_read_tokens += c.cache_read_tokens
