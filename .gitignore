@@ -8,5 +8,5 @@ runs/
 .srccache/
 .env
 
-# internal working docs — never publish
-BENCHMARK_AUDIT.md
+# internal working docs — never publish (audits, host/image notes, strategy, …)
+_internal/
