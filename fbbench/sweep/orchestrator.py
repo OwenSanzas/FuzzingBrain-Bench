@@ -209,21 +209,33 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME
         # cell dir, so resume / aggregate / report downstream are arm-agnostic.
-        if arm == "codex":
-            from fbbench.sweep import codex
-            raw = (model_map or {}).get(model, model)
-            return codex.run_cell(cell_dir(out, bug, model, sample), bug, timeout,
-                                  max_turns, model=raw, auth=auth, api_key=api_key,
-                                  preserve_pocs=preserve_pocs)
-        if arm == "claudecode":
-            from fbbench.sweep import claudecode
-            raw = (model_map or {}).get(model, model)
-            return claudecode.run_cell(cell_dir(out, bug, model, sample), bug, raw,
-                                       timeout, max_turns, auth=auth, api_key=api_key,
-                                       preserve_pocs=preserve_pocs)
-        return run_cell(model, bug, sample, max_turns, out, timeout,
-                        preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                        api_key=api_key, image_prefix=image_prefix, runner=runner)
+        #
+        # Isolate per-cell failures: an arm that RAISES (e.g. the grade oracle is
+        # unreachable, per _best_caps) must NOT kill the whole matrix — otherwise a
+        # single bad cell discards the aggregate + report for every cell that DID
+        # finish. Catch it, record the error, and let the run continue. No score.json
+        # is written on the failing path (the arms write it only after grading), so
+        # resume simply re-runs the cell next time instead of freezing a false zero.
+        try:
+            if arm == "codex":
+                from fbbench.sweep import codex
+                raw = (model_map or {}).get(model, model)
+                return codex.run_cell(cell_dir(out, bug, model, sample), bug, timeout,
+                                      max_turns, model=raw, auth=auth, api_key=api_key,
+                                      preserve_pocs=preserve_pocs)
+            if arm == "claudecode":
+                from fbbench.sweep import claudecode
+                raw = (model_map or {}).get(model, model)
+                return claudecode.run_cell(cell_dir(out, bug, model, sample), bug, raw,
+                                           timeout, max_turns, auth=auth, api_key=api_key,
+                                           preserve_pocs=preserve_pocs)
+            return run_cell(model, bug, sample, max_turns, out, timeout,
+                            preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
+                            api_key=api_key, image_prefix=image_prefix, runner=runner)
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            return {"error": f"{type(e).__name__}: {e}"}
 
     jobs = max(1, jobs)
     t0 = time.time()

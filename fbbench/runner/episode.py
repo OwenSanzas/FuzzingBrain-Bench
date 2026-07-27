@@ -324,14 +324,15 @@ def run_episode(
                                 "agreed": out.get("agreed"),
                             }, indent=2))
 
-                    # Steering flags: a full single-input solve stops the episode
-                    # (when stop_on_solve); any other crash triggers the breadth
-                    # "keep hunting" nudge. Crash-driven — silent when nothing
-                    # crashed. target_found is read for SCORING only and is NEVER
-                    # surfaced to the model.
+                    # Steering flags. crashed_hit fires the breadth "keep hunting"
+                    # nudge on ANY crash — INCLUDING the target — so the model can
+                    # never infer target_found from the nudge's presence/absence
+                    # (it would leak the sealed verdict under --no-stop-on-solve).
+                    # solved_hit is separate: it only gates stop_on_solve, and
+                    # target_found is otherwise read for SCORING, never surfaced.
                     if target_found:
                         solved_hit = True
-                    elif (bestof_now or caps_now).get("crash") == "fired":
+                    if (bestof_now or caps_now).get("crash") == "fired":
                         crashed_hit = True
 
                     payload = json.dumps({"harness_output": out.get("harness_output", {})})
