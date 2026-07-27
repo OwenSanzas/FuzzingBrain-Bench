@@ -105,6 +105,55 @@ def _compact_history(messages: list[dict], *, keep_recent_turns: int,
     return reclaimed
 
 
+def _estimate_tokens(sysp: str, messages: list[dict]) -> int:
+    """Rough token estimate (chars/4) of what a complete() call will send: the
+    system prompt + every message's text / content / note / tool-result bodies /
+    tool-call args. Used ONLY as a pre-call overflow guard (the provider's exact
+    input_tokens stays authoritative for cost). Deliberately conservative."""
+    chars = len(sysp or "")
+    for m in messages:
+        chars += len(m.get("text") or "") + len(m.get("content") or "") + len(m.get("note") or "")
+        for r in m.get("results") or []:
+            chars += len(r.content or "")
+        for tc in m.get("tool_calls") or []:
+            chars += len(json.dumps(getattr(tc, "input", None) or {}))
+    return chars // 4
+
+
+def _compact_to_fit(sysp: str, messages: list[dict], window: int) -> int:
+    """Compact BEFORE sending so the about-to-send context fits with room for a
+    reply. Escalates: first elide OLD large tool outputs (keep recent 4), then
+    expose more (keep 1), then ALL turns (keep 0) — until the estimate fits or
+    nothing is left to reclaim. setup stays pinned throughout. Returns chars
+    reclaimed."""
+    if window <= 0:
+        return 0
+    target = min(_COMPACT_TRIGGER_FRAC * window, window - _COMPACT_OUTPUT_RESERVE)
+    reclaimed = 0
+    for keep in (_COMPACT_KEEP_RECENT_TURNS, 1, 0):
+        if _estimate_tokens(sysp, messages) <= target:
+            break
+        r = _compact_history(messages, keep_recent_turns=keep,
+                             large_chars=_COMPACT_LARGE_CHARS)
+        reclaimed += r
+        if r == 0 and keep == 0:
+            break  # nothing left to reclaim
+    return reclaimed
+
+
+# Substrings that mark a provider "prompt too long / context exceeded" error.
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length_exceeded", "context length", "maximum context",
+    "prompt is too long", "too many tokens", "reduce the length",
+    "input is too long", "exceeds the maximum",
+)
+
+
+def _is_context_overflow(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(mk in msg for mk in _CONTEXT_OVERFLOW_MARKERS)
+
+
 @dataclass
 class EpisodeResult:
     bug_id: str
@@ -246,9 +295,37 @@ def run_episode(
           "tools": tools})
 
     def complete_once() -> Completion:
+        # Pre-call guard: compact BEFORE sending, so a turn that just appended a lot
+        # (many/large tool results) cannot overflow the window on THIS call — the
+        # post-call exact count would be one step behind. Acts on an estimate of the
+        # about-to-send size and escalates until it fits (see _compact_to_fit).
+        window = context_window(backend.model)
+        reclaimed = _compact_to_fit(sysp, messages, window)
+        if reclaimed:
+            est = _estimate_tokens(sysp, messages)
+            pct = round(100.0 * est / window, 1) if window else 0.0
+            ev = {"event": "context_compaction", "turn": turn, "est_tokens": est,
+                  "window": window, "pct_of_window": pct, "reclaimed_chars": reclaimed,
+                  "msg": (f"context compaction (pre-call) - est/limit = "
+                          f"{est}/{window} = {pct}%; reclaimed {reclaimed} chars")}
+            log(ev)
+            tlog(ev)
         # Per-turn output cap. ExploitBench v8.yaml uses 65536; matches
         # Anthropic's recommended starting point for xhigh thinking effort.
-        c = backend.complete(sysp, messages, tools, max_tokens=65536)
+        try:
+            c = backend.complete(sysp, messages, tools, max_tokens=65536)
+        except Exception as e:  # noqa: BLE001
+            if not _is_context_overflow(e):
+                raise
+            # Backstop: estimate was off and the provider rejected for length. Hard-
+            # compact everything (no recent-turn protection, tiny threshold), keeping
+            # only setup pinned, and retry ONCE so the cell degrades instead of dying.
+            hard = _compact_history(messages, keep_recent_turns=0, large_chars=1)
+            ev = {"event": "context_overflow_retry", "turn": turn, "window": window,
+                  "reclaimed_chars": hard, "error": str(e)[:200]}
+            log(ev)
+            tlog(ev)
+            c = backend.complete(sysp, messages, tools, max_tokens=65536)
         result.input_tokens += c.input_tokens
         result.output_tokens += c.output_tokens
         result.cache_read_tokens += c.cache_read_tokens
@@ -413,31 +490,9 @@ def run_episode(
             # Record the budget note in the transcript so the run is auditable
             # (it's injected into the model's context but not in tool_result).
             tlog({"event": "budget_note", "turn": turn, "note": note})
-            # Conversation compaction: the context we just sent (comp's usage) is
-            # the provider's exact prompt-token count. If it is nearing the model's
-            # window, elide old large tool outputs before the next call so we
-            # degrade gracefully instead of hitting context_length_exceeded.
-            ctx_tokens = (comp.input_tokens + comp.cache_read_tokens
-                          + comp.cache_write_tokens)
-            window = context_window(backend.model)
-            trigger_at = min(_COMPACT_TRIGGER_FRAC * window,
-                             window - _COMPACT_OUTPUT_RESERVE)
-            if ctx_tokens >= trigger_at:
-                reclaimed = _compact_history(
-                    messages, keep_recent_turns=_COMPACT_KEEP_RECENT_TURNS,
-                    large_chars=_COMPACT_LARGE_CHARS)
-                # Record the trigger for HUMANS (episode.jsonl / transcript.jsonl);
-                # this never enters `messages`, so the model never sees it. Logged
-                # whenever the trigger fires, even if nothing was reclaimable.
-                pct = round(100.0 * ctx_tokens / window, 1) if window else 0.0
-                ev = {"event": "context_compaction", "turn": turn,
-                      "ctx_tokens": ctx_tokens, "window": window,
-                      "pct_of_window": pct, "reclaimed_chars": reclaimed,
-                      "msg": (f"context compaction triggered - context/limit = "
-                              f"{ctx_tokens}/{window} = {pct}%; "
-                              f"reclaimed {reclaimed} chars")}
-                log(ev)
-                tlog(ev)
+            # (Context compaction now runs PRE-call in complete_once, so a turn's
+            # freshly-appended tool results can't overflow the next call before we
+            # get a chance to compact. Nothing to do here.)
             # Stop-on-solve (default; disable with --no-stop-on-solve): a single
             # candidate reproduced the full target defect (target_bug_found). The
             # model is blind to the verdict and cannot know it succeeded, so the
