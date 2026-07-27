@@ -54,6 +54,21 @@ CATALOG: list[tuple[str, str, str]] = [
 ]
 
 SUPPORTED_MODELS = [m for m, _, _ in CATALOG]
+
+# Input context window (max prompt tokens) per model, used by the runner's
+# conversation-compaction trigger. Values are filled from the published specs
+# (see tools/model_context_windows.csv). Any model NOT listed here — including
+# ids passed that the catalog doesn't enumerate — falls back to a conservative
+# DEFAULT_CONTEXT_WINDOW so the trigger still works (and never over-estimates).
+DEFAULT_CONTEXT_WINDOW = 128_000
+CONTEXT_WINDOWS: dict[str, int] = {
+    # TODO(fill from tools/model_context_windows.csv): { "claude-opus-4-7": 200_000, ... }
+}
+
+
+def context_window(model: str) -> int:
+    """Max input tokens for `model`; DEFAULT_CONTEXT_WINDOW if unknown."""
+    return CONTEXT_WINDOWS.get(model, DEFAULT_CONTEXT_WINDOW)
 PROVIDERS = ("anthropic", "openai", "gemini", "deepseek",
              "dashscope", "moonshot", "zhipu", "openrouter", "ollama")
 

@@ -16,7 +16,9 @@ from fbbench.prompts import (
     KEEP_HUNTING_NUDGE, TRUNCATION_NUDGE,
     budget_note, build_initial_user_message, system_prompt,
 )
+from dataclasses import replace
 from fbbench.grading.bench_yaml import DEFAULT_KB, harness_sanitizer
+from fbbench.models.catalog import context_window
 from fbbench.runner.backends.base import Backend, Completion, ToolResult
 from fbbench.runner.mcp_client import MCPClient, MCPToolError
 
@@ -50,6 +52,50 @@ def _is_truncated(comp: Completion) -> bool:
     # before emitting its tool call; that is truncation, not "no tool use".
     sr = (comp.stop_reason or "").lower()
     return sr == "length" or "max_tokens" in sr or "max_token" in sr
+
+
+# --- Conversation compaction ------------------------------------------------
+# The message history is append-only, so over a long episode it grows until it
+# overflows the model's context window (API then rejects with
+# context_length_exceeded). When the TRUE context size (input + cache tokens the
+# provider counted) crosses a fraction of the model's window, we elide the big
+# output BODIES of OLD tool results — keeping the tool call (name+args live in
+# the assistant turn) plus a short placeholder, so the agent still knows what it
+# did, just not the full dump. Pinned (never elided): system, the initial task,
+# and the setup result. Only the api/model arm uses this loop; the codex/claude
+# CLIs manage their own context.
+_COMPACT_TRIGGER_FRAC = 0.75    # start compacting at this fraction of the window
+_COMPACT_KEEP_RECENT_TURNS = 4  # most-recent tool-result turns kept in full
+_COMPACT_LARGE_CHARS = 1500     # only elide a tool result whose content exceeds this
+_ELIDED_PREFIX = "[elided:"     # marker so compaction is idempotent
+_PINNED_TOOLS = {"setup"}       # small + critical results: never elide
+
+
+def _compact_history(messages: list[dict], *, keep_recent_turns: int,
+                     large_chars: int) -> int:
+    """Elide the large output bodies of OLD tool results IN PLACE; return the
+    number of characters reclaimed. Preserves id/name/is_error (so the
+    tool_use<->tool_result pairing stays valid), keeps the most-recent
+    `keep_recent_turns` tool messages and any pinned/small result untouched, and
+    is idempotent (already-elided results are skipped)."""
+    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    old_idxs = tool_idxs[:-keep_recent_turns] if keep_recent_turns > 0 else tool_idxs
+    reclaimed = 0
+    for i in old_idxs:
+        new_results = []
+        for r in messages[i].get("results") or []:
+            if (r.name not in _PINNED_TOOLS
+                    and not r.content.startswith(_ELIDED_PREFIX)
+                    and len(r.content) > large_chars):
+                reclaimed += len(r.content)
+                placeholder = (f"{_ELIDED_PREFIX} {r.name} output was "
+                               f"{len(r.content)} chars, removed to save context; "
+                               f"re-run the tool if you need it again]")
+                new_results.append(replace(r, content=placeholder))
+            else:
+                new_results.append(r)
+        messages[i] = {**messages[i], "results": new_results}
+    return reclaimed
 
 
 @dataclass
@@ -360,6 +406,23 @@ def run_episode(
             # Record the budget note in the transcript so the run is auditable
             # (it's injected into the model's context but not in tool_result).
             tlog({"event": "budget_note", "turn": turn, "note": note})
+            # Conversation compaction: the context we just sent (comp's usage) is
+            # the provider's exact prompt-token count. If it is nearing the model's
+            # window, elide old large tool outputs before the next call so we
+            # degrade gracefully instead of hitting context_length_exceeded.
+            ctx_tokens = (comp.input_tokens + comp.cache_read_tokens
+                          + comp.cache_write_tokens)
+            window = context_window(backend.model)
+            if window > 0 and ctx_tokens >= _COMPACT_TRIGGER_FRAC * window:
+                reclaimed = _compact_history(
+                    messages, keep_recent_turns=_COMPACT_KEEP_RECENT_TURNS,
+                    large_chars=_COMPACT_LARGE_CHARS)
+                if reclaimed:
+                    ev = {"event": "compaction", "turn": turn,
+                          "ctx_tokens": ctx_tokens, "window": window,
+                          "reclaimed_chars": reclaimed}
+                    log(ev)
+                    tlog(ev)
             # Stop-on-solve (default; disable with --no-stop-on-solve): a single
             # candidate reproduced the full target defect (target_bug_found). The
             # model is blind to the verdict and cannot know it succeeded, so the
