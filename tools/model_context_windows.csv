@@ -1,26 +1,26 @@
-model_id,provider,tier,context_window_input_tokens,max_output_tokens,source_url
-claude-opus-4-7,anthropic,flagship,,,
-claude-sonnet-4-6,anthropic,mid,,,
-claude-haiku-4-5,anthropic,fast,,,
-gpt-5.5,openai,flagship,,,
-gpt-5.4,openai,mid,,,
-gpt-5,openai,mid,,,
-gpt-5.4-mini,openai,fast,,,
-gemini-3.1-pro-preview,gemini,flagship,,,
-gemini-3-pro-preview,gemini,flagship,,,
-gemini-3.5-flash,gemini,mid,,,
-gemini-2.5-pro,gemini,mid,,,
-gemini-2.5-flash,gemini,fast,,,
-gemini-2.5-flash-lite,gemini,fast,,,
-deepseek-v4-pro,deepseek,flagship,,,
-deepseek-v4-flash,deepseek,fast,,,
-qwen3-max,dashscope,flagship,,,
-qwen3-coder-plus,dashscope,flagship,,,
-qwen-plus,dashscope,mid,,,
-qwen-turbo,dashscope,fast,,,
-kimi-k2-0711-preview,moonshot,flagship,,,
-glm-4.6,zhipu,flagship,,,
-glm-4.5-air,zhipu,fast,,,
-qwen/qwen3-coder,openrouter,flagship,,,
-qwen3:30b-a3b,ollama,flagship,,,
-llama3.1:8b,ollama,fast,,,
+model_id,provider,tier,context_window_tokens,max_output_tokens,status,source_url
+claude-opus-4-7,anthropic,flagship,1000000,128000,active(legacy),https://platform.claude.com/docs/en/about-claude/models/overview
+claude-sonnet-4-6,anthropic,mid,1000000,128000,active(legacy),https://platform.claude.com/docs/en/about-claude/models/overview
+claude-haiku-4-5,anthropic,fast,200000,64000,active,https://platform.claude.com/docs/en/about-claude/models/overview
+gpt-5.5,openai,flagship,1050000,128000,active,https://developers.openai.com/api/docs/models/gpt-5.5
+gpt-5.4,openai,mid,1050000,128000,active,https://developers.openai.com/api/docs/models/gpt-5.4
+gpt-5,openai,mid,400000,128000,active(superseded),https://developers.openai.com/api/docs/models/gpt-5
+gpt-5.4-mini,openai,fast,400000,128000,active,https://developers.openai.com/api/docs/models/gpt-5.4-mini
+gemini-3.1-pro-preview,gemini,flagship,1048576,65536,active,https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview
+gemini-3-pro-preview,gemini,flagship,1048576,65536,SHUTDOWN-2026-03-09(removed from catalog),https://ai.google.dev/gemini-api/docs/models
+gemini-3.5-flash,gemini,mid,1048576,65536,active,https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash
+gemini-2.5-pro,gemini,mid,1048576,65536,active,https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro
+gemini-2.5-flash,gemini,fast,1048576,65536,active,https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash
+gemini-2.5-flash-lite,gemini,fast,1048576,65536,active,https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite
+deepseek-v4-pro,deepseek,flagship,1000000,384000,active,https://api-docs.deepseek.com/quick_start/pricing
+deepseek-v4-flash,deepseek,fast,1000000,384000,active,https://api-docs.deepseek.com/quick_start/pricing
+qwen3-max,dashscope,flagship,262144,,active(output-unverified),https://help.aliyun.com/en/model-studio/coding-plan-faq
+qwen3-coder-plus,dashscope,flagship,1000000,65536,active(output-via-openrouter),https://help.aliyun.com/en/model-studio/coding-plan-faq
+qwen-plus,dashscope,mid,,,alias-version-drift(use dated id; falls back to default 128k),https://help.aliyun.com/en/model-studio/models
+qwen-turbo,dashscope,fast,,,alias-version-drift(use dated id; falls back to default 128k),https://help.aliyun.com/en/model-studio/models
+kimi-k2-0711-preview,moonshot,flagship,131072,,reportedly-deprecated-2026-05-25(CONFIRM),https://huggingface.co/moonshotai/Kimi-K2-Instruct
+glm-4.6,zhipu,flagship,202752,131072,active,https://docs.z.ai/guides/llm/glm-4.6
+glm-4.5-air,zhipu,fast,131072,98304,active,https://docs.z.ai/guides/llm/glm-4.5
+qwen/qwen3-coder,openrouter,flagship,262144,65536,active(output-unverified),https://openrouter.ai/qwen/qwen3-coder
+qwen3:30b-a3b,ollama,flagship,40960,,active(output=local num_predict),https://ollama.com/library/qwen3:30b-a3b
+llama3.1:8b,ollama,fast,131072,,active(output=local num_predict),https://ollama.com/library/llama3.1:8b

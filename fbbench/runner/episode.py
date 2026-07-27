@@ -64,7 +64,14 @@ def _is_truncated(comp: Completion) -> bool:
 # did, just not the full dump. Pinned (never elided): system, the initial task,
 # and the setup result. Only the api/model arm uses this loop; the codex/claude
 # CLIs manage their own context.
-_COMPACT_TRIGGER_FRAC = 0.75    # start compacting at this fraction of the window
+# Trigger compaction at 85% of the TOTAL window — BUT never let the input eat
+# into the room a full reply needs. The window is total (input+output); we request
+# up to _COMPACT_OUTPUT_RESERVE output tokens, so we also floor the trigger at
+# `window - reserve`. Whichever is smaller wins: big windows (1M) trigger at 85%;
+# small windows (Haiku 200k) trigger at the reserve floor (~63%) so 170k input +
+# 64k output can't overflow 200k.
+_COMPACT_TRIGGER_FRAC = 0.85
+_COMPACT_OUTPUT_RESERVE = 65_536 + 8_192  # our max_tokens + safety margin
 _COMPACT_KEEP_RECENT_TURNS = 4  # most-recent tool-result turns kept in full
 _COMPACT_LARGE_CHARS = 1500     # only elide a tool result whose content exceeds this
 _ELIDED_PREFIX = "[elided:"     # marker so compaction is idempotent
@@ -413,7 +420,9 @@ def run_episode(
             ctx_tokens = (comp.input_tokens + comp.cache_read_tokens
                           + comp.cache_write_tokens)
             window = context_window(backend.model)
-            if window > 0 and ctx_tokens >= _COMPACT_TRIGGER_FRAC * window:
+            trigger_at = min(_COMPACT_TRIGGER_FRAC * window,
+                             window - _COMPACT_OUTPUT_RESERVE)
+            if ctx_tokens >= trigger_at:
                 reclaimed = _compact_history(
                     messages, keep_recent_turns=_COMPACT_KEEP_RECENT_TURNS,
                     large_chars=_COMPACT_LARGE_CHARS)

@@ -18,9 +18,8 @@ CATALOG: list[tuple[str, str, str]] = [
     ("gpt-5.4",                  "openai",    "mid"),
     ("gpt-5",                    "openai",    "mid"),
     ("gpt-5.4-mini",             "openai",    "fast"),
-    # Gemini
+    # Gemini  (gemini-3-pro-preview removed: shut down 2026-03-09, migrate to 3.1)
     ("gemini-3.1-pro-preview",   "gemini",    "flagship"),
-    ("gemini-3-pro-preview",     "gemini",    "flagship"),
     ("gemini-3.5-flash",         "gemini",    "mid"),
     ("gemini-2.5-pro",           "gemini",    "mid"),
     ("gemini-2.5-flash",         "gemini",    "fast"),
@@ -61,8 +60,34 @@ SUPPORTED_MODELS = [m for m, _, _ in CATALOG]
 # ids passed that the catalog doesn't enumerate — falls back to a conservative
 # DEFAULT_CONTEXT_WINDOW so the trigger still works (and never over-estimates).
 DEFAULT_CONTEXT_WINDOW = 128_000
+# TOTAL context window (tokens; input + output + tools + reasoning), per the
+# vendor's published spec — cross-verified against official docs (see
+# tools/model_context_windows.csv for sources). NOT pure-input capacity.
 CONTEXT_WINDOWS: dict[str, int] = {
-    # TODO(fill from tools/model_context_windows.csv): { "claude-opus-4-7": 200_000, ... }
+    "claude-opus-4-7":        1_000_000,
+    "claude-sonnet-4-6":      1_000_000,
+    "claude-haiku-4-5":         200_000,
+    "gpt-5.5":                1_050_000,
+    "gpt-5.4":                1_050_000,
+    "gpt-5":                    400_000,
+    "gpt-5.4-mini":             400_000,
+    "gemini-3.1-pro-preview": 1_048_576,
+    "gemini-3.5-flash":       1_048_576,
+    "gemini-2.5-pro":         1_048_576,
+    "gemini-2.5-flash":       1_048_576,
+    "gemini-2.5-flash-lite":  1_048_576,
+    "deepseek-v4-pro":        1_000_000,
+    "deepseek-v4-flash":      1_000_000,
+    "qwen3-max":                262_144,
+    "qwen3-coder-plus":       1_000_000,
+    # qwen-plus / qwen-turbo: version-drifting aliases with NO stable window —
+    # use a dated snapshot id for reproducibility; they fall back to the default.
+    "kimi-k2-0711-preview":     131_072,
+    "glm-4.6":                  202_752,
+    "glm-4.5-air":              131_072,
+    "qwen/qwen3-coder":         262_144,
+    "qwen3:30b-a3b":             40_960,
+    "llama3.1:8b":              131_072,
 }
 
 
