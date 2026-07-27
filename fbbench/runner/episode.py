@@ -426,12 +426,18 @@ def run_episode(
                 reclaimed = _compact_history(
                     messages, keep_recent_turns=_COMPACT_KEEP_RECENT_TURNS,
                     large_chars=_COMPACT_LARGE_CHARS)
-                if reclaimed:
-                    ev = {"event": "compaction", "turn": turn,
-                          "ctx_tokens": ctx_tokens, "window": window,
-                          "reclaimed_chars": reclaimed}
-                    log(ev)
-                    tlog(ev)
+                # Record the trigger for HUMANS (episode.jsonl / transcript.jsonl);
+                # this never enters `messages`, so the model never sees it. Logged
+                # whenever the trigger fires, even if nothing was reclaimable.
+                pct = round(100.0 * ctx_tokens / window, 1) if window else 0.0
+                ev = {"event": "context_compaction", "turn": turn,
+                      "ctx_tokens": ctx_tokens, "window": window,
+                      "pct_of_window": pct, "reclaimed_chars": reclaimed,
+                      "msg": (f"context compaction triggered - context/limit = "
+                              f"{ctx_tokens}/{window} = {pct}%; "
+                              f"reclaimed {reclaimed} chars")}
+                log(ev)
+                tlog(ev)
             # Stop-on-solve (default; disable with --no-stop-on-solve): a single
             # candidate reproduced the full target defect (target_bug_found). The
             # model is blind to the verdict and cannot know it succeeded, so the
