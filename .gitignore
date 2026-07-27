@@ -7,3 +7,6 @@ output/
 runs/
 .srccache/
 .env
+
+# internal working docs — never publish
+BENCHMARK_AUDIT.md
