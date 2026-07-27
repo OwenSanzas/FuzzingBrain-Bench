@@ -1,12 +1,6 @@
 #!/bin/bash
-# Build script for openscreen-02.
-#
-# reached from openscreen's Cast ANSWER parsers. openscreen's Cast harness is
-# a Chromium GN target that cannot be built standalone outside a full chromium
-# checkout (see NOTES.md), so this bundle reproduces the SAME library frame
-# via Path B: build jsoncpp 1.9.4 statically with openscreen's production
-# defines (-DJSON_USE_EXCEPTION=0 -fno-exceptions) and link the
-# public-API repro that uses the identical `const Json::Value&; v[key]` shape.
+# Build script for openscreen-02: build the target library (asan + coverage)
+# and link the harness. Usage: build.sh build-libs | harness <config>
 set -euo pipefail
 cmd="${1:?usage: build.sh build-libs | harness <config>}"
 JOBS=$(nproc)
@@ -51,7 +45,7 @@ if [ "${cmd}" = "harness" ]; then
     clang++ ${CFH} ${SAN} -std=c++17 ${PRODDEF} \
         -fmacro-prefix-map=/src/= \
         -I "${JSONCPP}/include" \
-        /src/harness/repro_jsoncpp_array_string_index.cc \
+        /src/harness/jsoncpp_harness.cc \
         "${BUILD}/libjsoncpp.a" \
         -lpthread -lm \
         -o "${OUT}/harness"

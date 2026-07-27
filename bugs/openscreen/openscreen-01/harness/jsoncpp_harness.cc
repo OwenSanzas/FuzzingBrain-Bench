@@ -17,8 +17,7 @@ int main(int argc, char** argv) {
   ss << f.rdbuf();
   const std::string raw = ss.str();
 
-  // Use a heap allocation so ASan places a redzone immediately after
-  // the last byte (matches the libFuzzer / openscreen call shape).
+  // Heap-allocate the exact input size (matches the library call shape).
   char* buf = new char[raw.size()];
   std::memcpy(buf, raw.data(), raw.size());
 
