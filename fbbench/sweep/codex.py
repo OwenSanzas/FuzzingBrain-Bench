@@ -571,56 +571,60 @@ def run_cell(cell_dir: Path, bug: str, timeout_s: int,
     alias = _full_scan_alias(str(real))
     login = "chatgpt" if auth == "sub" else "api"
     image, root, work = stage_codex_env(str(real), bug, model, login)
-    r = run_codex(root, work, timeout_s, max_turns, api_key=api_key if auth == "api" else None)
-    log_path = r["log_path"]
+    try:
+        r = run_codex(root, work, timeout_s, max_turns, api_key=api_key if auth == "api" else None)
+        log_path = r["log_path"]
 
-    log_text = Path(log_path).read_text(errors="replace") if Path(log_path).is_file() else ""
-    cheated_web = bool(re.search(r"web search:|web_search\b|browser_use|fetch.*http", log_text, re.I))
+        log_text = Path(log_path).read_text(errors="replace") if Path(log_path).is_file() else ""
+        cheated_web = bool(re.search(r"web search:|web_search\b|browser_use|fetch.*http", log_text, re.I))
 
-    blobs = _candidate_blobs(work)
-    caps, best_blob, ts, solved = _best_caps(
-        alias, blobs, pocs_dir=str(cell_dir / "pocs") if preserve_pocs else None)
+        blobs = _candidate_blobs(work)
+        caps, best_blob, ts, solved = _best_caps(
+            alias, blobs, pocs_dir=str(cell_dir / "pocs") if preserve_pocs else None)
 
-    if best_blob:
-        shutil.copy(best_blob, cell_dir / "best_blob")
-    shutil.copy(log_path, cell_dir / "codex.log")
-    rollout = _rollout_path(os.path.join(root, "codex_home"))
-    cost = {}
-    if rollout:
-        shutil.copy(rollout, cell_dir / "rollout.jsonl")
-        cost = _codex_cost(rollout, model)
-        (cell_dir / "cost.json").write_text(json.dumps(cost, indent=2))
-    kb = capability_set(real)
-    # `solved` is the authoritative target_bug_found from _best_caps — NOT
-    # recomputed from caps-all-fired, so it matches the API arm exactly.
-    score = {
-        "bug_id": bug, "model": model_label(model), "seed": 0,
-        "capabilities": caps, "tier_score": ts,
-        "k_b": kb, "solved": solved,
-        "terminated_reason": r["terminated"],
-        "turns_used": r["turns"], "max_turns": max_turns,
-        "duration_s": round(r["duration_s"], 1),
-        "grade_calls": r["grade_calls"], "blobs_written": len(blobs),
-        "tokens_used": r["tokens"] or None,
-        "cheated_web": cheated_web,
-        "total_usd": cost.get("total_usd"),  # token-derived diagnostic
-    }
-    (cell_dir / "score.json").write_text(json.dumps(score, indent=2))
+        if best_blob:
+            shutil.copy(best_blob, cell_dir / "best_blob")
+        shutil.copy(log_path, cell_dir / "codex.log")
+        rollout = _rollout_path(os.path.join(root, "codex_home"))
+        cost = {}
+        if rollout:
+            shutil.copy(rollout, cell_dir / "rollout.jsonl")
+            cost = _codex_cost(rollout, model)
+            (cell_dir / "cost.json").write_text(json.dumps(cost, indent=2))
+        kb = capability_set(real)
+        # `solved` is the authoritative target_bug_found from _best_caps — NOT
+        # recomputed from caps-all-fired, so it matches the API arm exactly.
+        score = {
+            "bug_id": bug, "model": model_label(model), "seed": 0,
+            "capabilities": caps, "tier_score": ts,
+            "k_b": kb, "solved": solved,
+            "terminated_reason": r["terminated"],
+            "turns_used": r["turns"], "max_turns": max_turns,
+            "duration_s": round(r["duration_s"], 1),
+            "grade_calls": r["grade_calls"], "blobs_written": len(blobs),
+            "tokens_used": r["tokens"] or None,
+            "cheated_web": cheated_web,
+            "total_usd": cost.get("total_usd"),  # token-derived diagnostic
+        }
+        (cell_dir / "score.json").write_text(json.dumps(score, indent=2))
 
-    # Host-side report generation (the RUNNER builds the report, never the agent):
-    # convert the codex rollout to report.py's transcript format, then render the
-    # per-cell report.html exactly like the API arm.
-    if rollout:
-        try:
-            _rollout_to_transcript(str(cell_dir / "rollout.jsonl"),
-                                   cell_dir / "transcript.jsonl",
-                                   model=model_label(model), bug_id=bug, kb=kb)
-            from fbbench.runner.report import write_report
-            write_report(cell_dir)
-        except Exception as e:  # noqa: BLE001
-            print(f"      report skipped: {e}")
-    shutil.rmtree(root, ignore_errors=True)
-    return score
+        # Host-side report generation (the RUNNER builds the report, never the agent):
+        # convert the codex rollout to report.py's transcript format, then render the
+        # per-cell report.html exactly like the API arm.
+        if rollout:
+            try:
+                _rollout_to_transcript(str(cell_dir / "rollout.jsonl"),
+                                       cell_dir / "transcript.jsonl",
+                                       model=model_label(model), bug_id=bug, kb=kb)
+                from fbbench.runner.report import write_report
+                write_report(cell_dir)
+            except Exception as e:  # noqa: BLE001
+                print(f"      report skipped: {e}")
+        return score
+    finally:
+        # Always clean the host scratch dir (codex_home + workspace + auth
+        # symlink), even if grading above raises — matches the claudecode arm.
+        shutil.rmtree(root, ignore_errors=True)
 
 
 # The Codex arm has no standalone CLI: it is driven through the single unified
