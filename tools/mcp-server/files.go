@@ -186,7 +186,7 @@ func (s *server) toolReadFile(args []byte) (any, error) {
 	for ; i >= 0 && i < end; i++ {
 		ln := lines[i]
 		if len(ln) > maxLineChars {
-			ln = ln[:maxLineChars] + "… [line truncated]"
+			ln = ln[:maxLineChars] + "... [line truncated]"
 		}
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, ln)
 		shown++
