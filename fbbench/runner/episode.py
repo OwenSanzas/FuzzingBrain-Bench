@@ -71,7 +71,13 @@ def _is_truncated(comp: Completion) -> bool:
 # small windows (Haiku 200k) trigger at the reserve floor (~63%) so 170k input +
 # 64k output can't overflow 200k.
 _COMPACT_TRIGGER_FRAC = 0.85
-_COMPACT_OUTPUT_RESERVE = 65_536 + 8_192  # our max_tokens + safety margin
+# Per-turn output request. Default cap, but shrunk per model so input+output fit
+# the window (a small-window model can't be asked for more output than its whole
+# window); floored so the model always gets a usable reply budget.
+_MAX_OUTPUT_TOKENS = 65_536       # desired cap (ExploitBench parity)
+_MIN_OUTPUT_TOKENS = 4_096        # never request less than this
+_OUTPUT_SAFETY_MARGIN = 2_048     # slack kept under the window
+_COMPACT_OUTPUT_RESERVE = _MAX_OUTPUT_TOKENS + 8_192  # room the trigger reserves
 _COMPACT_KEEP_RECENT_TURNS = 4  # most-recent tool-result turns kept in full
 _COMPACT_LARGE_CHARS = 1500     # only elide a tool result whose content exceeds this
 _ELIDED_PREFIX = "[elided:"     # marker so compaction is idempotent
@@ -128,6 +134,14 @@ def _estimate_tokens(sysp: str, messages: list[dict], tokens_per_char: float) ->
     tracks this model's actual tokenizer and even absorbs the tools-schema
     overhead). Cold start uses chars/4. Guard-only; provider usage is authoritative."""
     return int(_measure_chars(sysp, messages) * tokens_per_char)
+
+
+def _output_budget(est_input_tokens: int, window: int) -> int:
+    """Max output tokens to request: the default cap, shrunk so input+output fit
+    the window (a small-window model can't produce more output than its whole
+    window), floored so the model always gets a usable reply budget."""
+    room = window - est_input_tokens - _OUTPUT_SAFETY_MARGIN
+    return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, room))
 
 
 def _compact_to_fit(sysp: str, messages: list[dict], window: int,
@@ -316,8 +330,8 @@ def run_episode(
         # estimate of the about-to-send size and escalates until it fits.
         window = context_window(backend.model)
         reclaimed = _compact_to_fit(sysp, messages, window, tpc[0])
+        est = _estimate_tokens(sysp, messages, tpc[0])
         if reclaimed:
-            est = _estimate_tokens(sysp, messages, tpc[0])
             pct = round(100.0 * est / window, 1) if window else 0.0
             ev = {"event": "context_compaction", "turn": turn, "est_tokens": est,
                   "window": window, "pct_of_window": pct, "reclaimed_chars": reclaimed,
@@ -326,10 +340,12 @@ def run_episode(
                           f"{est}/{window} = {pct}%; reclaimed {reclaimed} chars")}
             log(ev)
             tlog(ev)
-        # Per-turn output cap. ExploitBench v8.yaml uses 65536; matches
-        # Anthropic's recommended starting point for xhigh thinking effort.
+        # Adaptive per-turn output cap: default 65536, but shrunk so input+output
+        # fit the window (fixes small-window models where a fixed 65536 alone
+        # exceeds the whole window, and shrinks output when the input is large).
         try:
-            c = backend.complete(sysp, messages, tools, max_tokens=65536)
+            c = backend.complete(sysp, messages, tools,
+                                 max_tokens=_output_budget(est, window))
         except Exception as e:  # noqa: BLE001
             if not _is_context_overflow(e):
                 raise
@@ -341,7 +357,9 @@ def run_episode(
                   "reclaimed_chars": hard, "error": str(e)[:200]}
             log(ev)
             tlog(ev)
-            c = backend.complete(sysp, messages, tools, max_tokens=65536)
+            est = _estimate_tokens(sysp, messages, tpc[0])
+            c = backend.complete(sysp, messages, tools,
+                                 max_tokens=_output_budget(est, window))
         # Calibrate: real prompt tokens / chars we actually sent (messages are
         # unchanged until the caller appends), so the ratio absorbs formatting +
         # tools-schema overhead the char count misses. Refresh only on real data.
