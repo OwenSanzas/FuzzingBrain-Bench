@@ -272,7 +272,7 @@ func toolSchemas() []map[string]any {
 		},
 		{
 			"name":        "list_directory",
-			"description": "List a directory's entries (must be under the challenge source or workspace). Not recursive. Returns each entry's name, type (file | dir | symlink), and size in bytes.",
+			"description": "List a directory's entries (must be under the challenge source or workspace). Not recursive. Returns each entry's name, type (file | dir | symlink), and size in bytes, plus total_entries and truncated (entries are capped at 1000; if truncated, narrow the path).",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

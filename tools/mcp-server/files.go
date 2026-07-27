@@ -27,6 +27,7 @@ type writeFileParams struct {
 const (
 	defaultReadLines = 2000 // max lines returned when `limit` is unset (Claude Code parity)
 	maxLineChars     = 2000 // per-line char cap; longer lines are truncated with a marker
+	maxDirEntries    = 1000 // list_directory entry cap; a huge dir would blow the context
 )
 
 var errPermissionDenied = errors.New("permission denied")
@@ -99,6 +100,13 @@ func (s *server) toolListDirectory(args []byte) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read dir: %w", err)
 	}
+	// Cap the number of entries so a huge directory can't blow the agent's
+	// context. os.ReadDir returns entries sorted by name, so the cap is stable.
+	total := len(entries)
+	truncated := total > maxDirEntries
+	if truncated {
+		entries = entries[:maxDirEntries]
+	}
 	out := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		info, _ := e.Info()
@@ -119,7 +127,12 @@ func (s *server) toolListDirectory(args []byte) (any, error) {
 			"size": size,
 		})
 	}
-	return map[string]any{"path": abs, "entries": out}, nil
+	return map[string]any{
+		"path":          abs,
+		"entries":       out,
+		"total_entries": total,
+		"truncated":     truncated,
+	}, nil
 }
 
 func (s *server) toolReadFile(args []byte) (any, error) {
