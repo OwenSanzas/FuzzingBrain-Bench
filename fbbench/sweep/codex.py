@@ -395,8 +395,15 @@ def _best_caps(alias: str, blobs: list[str],
     for i, b in enumerate(blobs):
         try:
             resp = _remote_grade(alias, Path(b).read_bytes())
-        except Exception:
-            continue
+        except Exception as e:
+            # Do NOT swallow a grading failure into a silent zero: an all-failed
+            # cell would be indistinguishable from a genuine miss and then frozen
+            # forever by resume. Fail loudly with context so the operator sees the
+            # oracle is down (and the run stops instead of recording false zeros).
+            raise RuntimeError(
+                f"grade oracle unreachable/erroring for bug={alias} "
+                f"(blob {i}: {os.path.basename(b)}) via {GRADE_URL}: {e}"
+            ) from e
         caps = resp.get("capabilities", {})
         target = bool(resp.get("target_bug_found", False))
         ts = sum(1 for f in FLAGS if caps.get(f) == "fired")
