@@ -272,7 +272,7 @@ func toolSchemas() []map[string]any {
 		},
 		{
 			"name":        "list_directory",
-			"description": "List a directory's entries (must be under the challenge source or workspace). Not recursive. Returns each entry's name, type (file | dir | symlink), and size in bytes.",
+			"description": "List a directory's entries (must be under the challenge source or workspace). Not recursive. Returns each entry's name, type (file | dir | symlink), and size in bytes, plus total_entries and truncated (entries are capped at 1000; if truncated, narrow the path).",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -283,7 +283,7 @@ func toolSchemas() []map[string]any {
 		},
 		{
 			"name":        "read_file",
-			"description": "Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the oracle answer keys, return \"permission denied\". Returns content, total_lines, and truncated (true if more lines remain).",
+			"description": "Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the oracle answer keys, return \"permission denied\". Output is capped (2000 lines, 2000 chars/line, 128 KB total); returns content, total_lines, lines_shown, truncated, and next_offset — if truncated, read on with offset=next_offset.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
