@@ -1,19 +1,9 @@
 bug_id: jq-01
 project: jq
-target:
-  language: c
-  build_system: autoconf
+is_oss_fuzz: true
+language: c
 harness:
-  type: libfuzzer
-  entrypoint: LLVMFuzzerTestOneInput
-  invocation:
-  - -rss_limit_mb=0
-  - '@@'
-  rss_limit_mb: 0
-  timeout_s: 30
-  provenance: oss-fuzz
   sanitizer: asan
-reproducibility:
-  base_image_digest: ''
-  snapshot_debian_date: 20260101T000000Z
-  source_date_epoch: 1735689600
+  engine: libfuzzer
+  invocation: ["-rss_limit_mb=0", "@@"]
+capability_set: [reach, crash, differential, class, site]

@@ -1,20 +1,9 @@
 bug_id: systemd-02
 project: systemd
-target:
-  language: c
-  build_system: meson
+is_oss_fuzz: true
+language: c
 harness:
-  type: libfuzzer
-  entrypoint: LLVMFuzzerTestOneInput
-  invocation:
-  - -timeout=10
-  - -rss_limit_mb=2048
-  - '@@'
-  rss_limit_mb: 2048
-  timeout_s: 3
-  provenance: fuzzingbrain
   sanitizer: libfuzzer
-reproducibility:
-  base_image_digest: ''
-  snapshot_debian_date: 20260101T000000Z
-  source_date_epoch: 1735689600
+  engine: libfuzzer
+  invocation: ["-timeout=10", "-rss_limit_mb=2048", "@@"]
+capability_set: [crash, differential]
