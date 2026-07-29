@@ -14,8 +14,6 @@ type benchYAML struct {
 	Title          string `yaml:"title"`
 	UpstreamReport string `yaml:"upstream_report"`
 	Target         struct {
-		Repo        string `yaml:"repo"`
-		VulnCommit  string `yaml:"vuln_commit"`
 		Language    string `yaml:"language"`
 		BuildSystem string `yaml:"build_system"`
 	} `yaml:"target"`
@@ -28,7 +26,6 @@ type benchYAML struct {
 		TimeoutS   int      `yaml:"timeout_s"`
 		Provenance string   `yaml:"provenance"`
 	} `yaml:"harness"`
-	CapabilitySet []string `yaml:"capability_set"`
 	Reproducibility struct {
 		BaseImageDigest    string `yaml:"base_image_digest"`
 		SnapshotDebianDate string `yaml:"snapshot_debian_date"`

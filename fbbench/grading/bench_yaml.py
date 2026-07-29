@@ -56,9 +56,10 @@ def read_bench(path: Path) -> dict:
 
 
 def capability_set(bug_dir: Path) -> list[str]:
-    """K_b (required flags) for a bug, or the full default ladder if unset."""
-    kb = read_bench(Path(bug_dir) / "bench.yaml").get("capability_set")
-    return kb if isinstance(kb, list) and kb else list(DEFAULT_KB)
+    """K_b for a bug. The public tree is answer-free — the per-bug set is withheld
+    (it names the gradeable rungs), so scoring uses the full ladder and the remote
+    oracle applies the real set."""
+    return list(DEFAULT_KB)
 
 
 def find_bug(bug_id: str, repo: Path = REPO) -> Path | None:
