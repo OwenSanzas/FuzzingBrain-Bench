@@ -68,10 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{solved,failed}/ "
                              "(default on; --no-preserve-pocs to disable)")
-    sp_run.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=True,
-                        help="end at the first target solve (default on; "
-                             "--no-stop-on-solve lets the agent keep hunting until "
-                             "it stops or --max-turns)")
+    sp_run.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
+                        help="end at the first target solve (default OFF for "
+                             "unique-crash scoring — the agent keeps hunting for "
+                             "distinct crashes until it stops or --max-turns; pass "
+                             "--stop-on-solve to end at the first target solve)")
     dash = sp_run.add_mutually_exclusive_group()
     dash.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
                       help="force the live full-screen dashboard (default: on for a TTY, "

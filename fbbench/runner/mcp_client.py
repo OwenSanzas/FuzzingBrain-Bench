@@ -62,8 +62,21 @@ class MCPClient:
         cmd = ["docker", "run", "-i", "--rm",
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
-               "-e", "BENCH_GRADE_REVEAL=1",
-               image, "mcp-server"]
+               "-e", "BENCH_GRADE_REVEAL=1"]
+        # Point the in-container grader at a local grade server when the host sets
+        # BENCH_GRADE_URL. A localhost/127.0.0.1 URL means "the host", which the
+        # container reaches via the host-gateway alias, so rewrite it and publish
+        # the alias; other hosts pass through untouched. Without this the baked-in
+        # remote BENCH_GRADE_URL (the ngrok oracle) is used.
+        grade_url = os.environ.get("BENCH_GRADE_URL")
+        if grade_url:
+            for local in ("127.0.0.1", "localhost"):
+                if local in grade_url:
+                    grade_url = grade_url.replace(local, "host.docker.internal")
+                    cmd += ["--add-host", "host.docker.internal:host-gateway"]
+                    break
+            cmd += ["-e", f"BENCH_GRADE_URL={grade_url}"]
+        cmd += [image, "mcp-server"]
         bug_dir, workspace = "/src", "/workspace"
         self._proc = subprocess.Popen(
             cmd,

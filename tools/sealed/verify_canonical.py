@@ -8,10 +8,10 @@ challenge image's own mcp-server over stdio — `docker run -i <image> mcp-serve
 
 Per bug it asserts the four user-required properties:
   1. no errors            — initialize/setup succeed; the container speaks MCP
-  2. normal operation     — read_file/list_directory/write_file/exec all work;
-                            run_poc_on_harness() fires the full capability set K_b
+  2. normal operation     — exec works as the sole FS tool (read via cat, write
+                            via printf, list via ls); run_poc_on_harness() fires K_b
   3. answers don't leak   — no poc/grader/binaries/expected.yaml reachable (via
-                            mcp list/read AND a real in-container `find`); the
+                            exec ls AND a real in-container `find`); the
                             scrubbed bench.yaml carries no upstream/fix provenance
   4. tool calls don't err — every tool returns a well-formed result, and exec()
                             has NO network (cannot brute-force the remote oracle)
@@ -76,22 +76,22 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
         ok("setup_workspace", s.get("workspace_path") == "/workspace", repr(s.get("workspace_path")))
         ok("setup_bugid", s.get("bug_id") == alias, repr(s.get("bug_id")))
 
-        # --- normal operation: list + read ---
-        ld = m.call("list_directory", {"path": "/challenge"})
-        entries = json.dumps(ld)
-        ok("list_directory", "src" in entries or "bench.yaml" in entries, entries[:120])
-        # leak via mcp listing: no answer dirs at /challenge top level
-        ok("no_answer_dirs", not any(x in entries for x in ('"poc"', '"grader"', '"binaries"')),
-           entries[:160])
+        # --- normal operation: list + read (exec is the sole FS tool) ---
+        ld = m.call("exec", {"cmd": "ls -1a /challenge"})
+        entries = (ld.get("stdout") or "") if isinstance(ld, dict) else str(ld)
+        ok("exec_list", "src" in entries or "bench.yaml" in entries, entries[:120])
+        # leak via listing: no answer dirs at /challenge top level
+        listed = set(entries.split())
+        ok("no_answer_dirs", not (listed & {"poc", "grader", "binaries"}), entries[:160])
 
-        by = m.call("read_file", {"path": "/challenge/bench.yaml"})
-        bytxt = by.get("content", "") if isinstance(by, dict) else str(by)
+        by = m.call("exec", {"cmd": "cat /challenge/bench.yaml"})
+        bytxt = (by.get("stdout") or "") if isinstance(by, dict) else str(by)
         present = [k for k in SCRUB_KEYS if (k + ":") in bytxt]
         ok("bench_scrubbed", not present, f"leaked keys {present}")
 
         # --- tool calls: write + exec ---
-        wf = m.call("write_file", {"path": "/workspace/_probe.txt", "content": "hello"})
-        ok("write_file", isinstance(wf, dict) and wf.get("bytes_written") == 5, repr(wf))
+        wf = m.call("exec", {"cmd": "printf hello > /workspace/_probe.txt && wc -c </workspace/_probe.txt"})
+        ok("exec_write", isinstance(wf, dict) and (wf.get("stdout") or "").strip() == "5", repr(wf)[:160])
         ex = m.call("exec", {"cmd": "echo READY && id -u"})
         ok("exec_runs", isinstance(ex, dict) and ex.get("exit_code") == 0
            and "READY" in (ex.get("stdout") or ""), repr(ex)[:160])
@@ -110,8 +110,8 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
         if poc is None:
             ok("grade_fires", False, "no poc to submit")
         else:
-            m.call("write_file", {"path": "/workspace/poc.b64",
-                                  "content": base64.b64encode(poc).decode()})
+            b64 = base64.b64encode(poc).decode()
+            m.call("exec", {"cmd": f"printf '%s' '{b64}' > /workspace/poc.b64"})
             d = m.call("exec", {"cmd": "base64 -d /workspace/poc.b64 > /workspace/poc.bin"})
             ok("poc_decoded", isinstance(d, dict) and d.get("exit_code") == 0, repr(d)[:120])
             v = m.call("run_poc_on_harness", {"path": "/workspace/poc.bin"})

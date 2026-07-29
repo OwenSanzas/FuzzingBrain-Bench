@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const execTruncate = 2000
+const execTruncate = 128 * 1024 // 128 KB per stream, matching the old read_file cap
 
 // execEnvDeny lists environment variables that must never reach the agent's
 // shell: they would leak the oracle location or the privilege-separation

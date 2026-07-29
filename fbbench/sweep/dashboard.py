@@ -411,7 +411,11 @@ def run_cell_tailing(cmd: list[str], cwd: str, timeout: int, episode_path: Path,
 
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE)
-    deadline = time.time() + timeout
+    # The episode owns its --timeout budget and self-stops to write score.json;
+    # this killer is only a backstop, so give it the same graceful headroom the
+    # plain run_cell path uses (orchestrator._SUBPROC_BACKSTOP_S).
+    from fbbench.sweep.orchestrator import _SUBPROC_BACKSTOP_S
+    deadline = time.time() + timeout + _SUBPROC_BACKSTOP_S
     pos = 0
     buf = ""
     killed = False

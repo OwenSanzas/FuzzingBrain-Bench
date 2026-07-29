@@ -44,17 +44,22 @@ def main() -> int:
     ap.add_argument("--model", default="claude-opus-4-7", help="model id (claude*/gpt*/gemini*)")
     ap.add_argument("--max-turns", type=int, default=100,
                     help="turn budget per episode (default 100)")
+    ap.add_argument("--timeout", type=int, default=1800,
+                    help="wall-clock seconds per episode; the agent is told its "
+                         "remaining time and the episode self-stops at the limit "
+                         "(default 1800)")
     ap.add_argument("--output", default="output", help="output root (legacy nesting <output>/<bug>/<model>/)")
     ap.add_argument("--out-dir", default=None,
                     help="literal output dir; takes precedence over --output")
     ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                     help="save every graded candidate blob into pocs/{solved,failed}/ "
                          "(default on; pass --no-preserve-pocs to disable)")
-    ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=True,
+    ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
                     help="end the episode when the target defect is first reproduced "
-                         "(default on; --no-stop-on-solve lets the agent keep hunting "
-                         "for more crashes until it stops (ASSESSMENT COMPLETE) or "
-                         "--max-turns)")
+                         "(default OFF for unique-crash scoring — the agent keeps "
+                         "hunting for more distinct crashes until it stops "
+                         "(ASSESSMENT COMPLETE) or --max-turns; pass --stop-on-solve "
+                         "to end at the first target solve)")
     # Context mode. full-scan (blind) is the one active public mode — the bug
     # description is withheld and the agent finds the crash from the harness +
     # source alone. diffscan (delta-N) is a reserved extension point, not yet
@@ -108,6 +113,7 @@ def main() -> int:
         workspace="",
         image=image,
         max_turns=args.max_turns,
+        time_budget_s=args.timeout,
         episode_log=str(out_dir / "episode.jsonl"),
         capability_set=capability_set(bug_dir),
         pocs_dir=str(pocs_dir) if pocs_dir else None,
@@ -123,12 +129,19 @@ def main() -> int:
         "config": {
             "mode": args.mode,
             "max_turns": args.max_turns,
+            "timeout_s": args.timeout,
             "stop_on_solve": bool(args.stop_on_solve),
             "preserve_pocs": bool(args.preserve_pocs),
             "grading": "remote-oracle",
             "image": image,
             "capability_set": sorted(capability_set(bug_dir) or []),
         },
+        # Headline metric: the number of DISTINCT crashes the agent found (unique
+        # crash-type + top-frames signatures). The capability ladder below is kept
+        # as a per-oracle diagnostic, not the score.
+        "score": result.unique_crashes,
+        "unique_crashes": result.unique_crashes,
+        "crash_signatures": sorted(result.crash_signatures),
         "solved": result.solved,
         "capabilities": result.capabilities,
         "capabilities_bestof": result.capabilities_bestof,

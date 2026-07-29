@@ -74,14 +74,24 @@ def bug_kb(bug: str) -> list[str]:
     return capability_set(bd) if bd else list(DEFAULT_KB)
 
 
+# The subprocess timeout is a BACKSTOP only: the episode owns its wall-clock
+# budget (--timeout) and stops itself gracefully so it can write score.json. We
+# give the subprocess this much extra headroom to finish that writeout + docker
+# teardown before we SIGKILL it out from under a hung run.
+_SUBPROC_BACKSTOP_S = 180
+
+
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
-             preserve_pocs: bool = True, stop_on_solve: bool = True,
+             timeout: int | None = None,
+             preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
     truth so the single and multi paths forward the SAME per-cell flags."""
     cmd = (runner or RUNNER) + ["--bug", bug, "--model", model,
                                 "--max-turns", str(max_turns), "--out-dir", str(cd)]
+    if timeout is not None:
+        cmd += ["--timeout", str(timeout)]
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
     if not stop_on_solve:
         cmd.append("--no-stop-on-solve")
@@ -94,14 +104,16 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
-             stop_on_solve: bool = True, api_key: str | None = None,
+             stop_on_solve: bool = False, api_key: str | None = None,
              image_prefix: str | None = None, runner: list[str] | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
-    cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
-                   stop_on_solve=stop_on_solve,
+    cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
+                   preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
                    api_key=api_key, image_prefix=image_prefix, runner=runner)
     try:
-        subprocess.run(cmd, cwd=REPO, timeout=timeout,
+        # The episode self-stops at `timeout`; SIGKILL only if it overruns the
+        # graceful-writeout backstop (so a solved run isn't lost to the killer).
+        subprocess.run(cmd, cwd=REPO, timeout=timeout + _SUBPROC_BACKSTOP_S,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except subprocess.TimeoutExpired:
         return {"error": "timeout"}
@@ -111,12 +123,13 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
     print("\n" + "=" * 78)
-    print(f"  {'model':24s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
+    print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'crash':>6s} {'diff':>7s} "
           f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
     print("  " + "-" * 82)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
         solved = refusals = n = 0
+        crashes = 0  # headline: total DISTINCT crashes (best-of-seeds per bug, summed)
         cost = 0.0
         for bug in bugs:
             # Coverage columns are best-of-seeds per rung (did the model ever
@@ -126,6 +139,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             caps = {"reach": False, "crash": False, "differential": False, "class": False, "site": False}
             seen = False
             bug_solved = False
+            bug_crashes = 0  # best (max) distinct-crash count across this bug's seeds
             for seed in seeds:
                 sj = cell_dir(out, bug, model, seed) / "score.json"
                 if not sj.is_file():
@@ -135,6 +149,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 for k in caps:
                     if s.get("capabilities", {}).get(k) == "fired":
                         caps[k] = True
+                bug_crashes = max(bug_crashes, int(s.get("unique_crashes", 0)))
                 bug_solved = bug_solved or _seed_solved(s)
                 if s.get("terminated_reason") == "refusal":
                     refusals += 1
@@ -143,11 +158,12 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             if not seen:
                 continue
             n += 1
+            crashes += bug_crashes
             for k in agg:
                 agg[k] += int(caps[k])
             if bug_solved:
                 solved += 1
-        print(f"  {model:24s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
+        print(f"  {model:24s} {crashes:>7d} {f'{solved}/{n}':>7s} "
               f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
               f"{refusals:>6d} {cost:>8.2f}")
     print("=" * 82)
@@ -156,7 +172,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                output: str | None = None, max_turns: int = 100, timeout: int = 1800,
                jobs: int = 1, dashboard_pref: bool | None = None,
-               preserve_pocs: bool = True, stop_on_solve: bool = True,
+               preserve_pocs: bool = True, stop_on_solve: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
                report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
@@ -255,7 +271,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
             print(f"  [{i}/{len(cells)}] start {model} / {bug} / sample-{sample}", flush=True)
             r = _cell(model, bug, sample)
             if r and "error" not in r:
-                print(f"      -> [{bug}] {r.get('tier_score','?')}/5  "
+                print(f"      -> [{bug}] {r.get('unique_crashes','?')} crashes  "
                       f"{r.get('terminated_reason','')}  ${r.get('total_usd') or 0.0:.4f}",
                       flush=True)
             else:
@@ -275,7 +291,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 tag = f"[{i}/{len(cells)}] {model} / {bug} / sample-{sample}"
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
-                    cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
+                    cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
+                                   preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
                                    api_key=api_key, image_prefix=image_prefix, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
@@ -285,7 +302,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                     print(f"  {tag} ...", flush=True)
                     r = _cell(model, bug, sample)
                     if r and "error" not in r:
-                        print(f"      -> {r.get('tier_score','?')}/5  {r.get('terminated_reason','')}  "
+                        print(f"      -> {r.get('unique_crashes','?')} crashes  {r.get('terminated_reason','')}  "
                               f"${r.get('total_usd') or 0.0:.4f}", flush=True)
                     else:
                         print(f"      -> FAILED: {r.get('error') if r else 'unknown'}", flush=True)
