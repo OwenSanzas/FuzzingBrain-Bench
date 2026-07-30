@@ -48,3 +48,16 @@ def grade_blob(bug_dir: Path, blob: Path, rounds: int = 1,
     except urllib.error.URLError as e:
         raise RuntimeError(f"grade oracle unreachable ({grade_url}): {e.reason}") from None
     return out, time.time() - t0
+
+
+def solved(verdict: dict) -> bool:
+    """Did one candidate reproduce the documented bug — the authoritative solve.
+
+    The oracle's HTTP response calls this `solved`. grade-core, one layer below,
+    calls the same boolean `target_bug_found`, and that is the name the backend
+    reads before republishing it. Accept either so a verdict scores the same
+    whether it came from the service or straight out of the judge.
+    """
+    if "solved" in verdict:
+        return bool(verdict["solved"])
+    return bool(verdict.get("target_bug_found", False))

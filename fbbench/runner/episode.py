@@ -18,6 +18,7 @@ from fbbench.prompts import (
 )
 from dataclasses import replace
 from fbbench.grading.bench_yaml import DEFAULT_KB, harness_sanitizer
+from fbbench.grading.grader import solved as oracle_solved
 from fbbench.models.catalog import context_window
 from fbbench.runner.backends.base import Backend, Completion, ToolResult
 from fbbench.runner.mcp_client import MCPClient, MCPToolError
@@ -454,7 +455,7 @@ def run_episode(
                     # capability_set incl. `differential` and any `n/a` rungs).
                     caps_now = out.get("capabilities", {})          # unanimity
                     bestof_now = out.get("capabilities_bestof") or {}  # best-of
-                    target_found = bool(out.get("target_bug_found", False))
+                    target_found = oracle_solved(out)
                     if target_found:
                         result.solved = True
 

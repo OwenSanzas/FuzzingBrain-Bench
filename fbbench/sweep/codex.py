@@ -35,7 +35,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-from fbbench.grading import DEFAULT_GRADE_URL, capability_set, find_bug
+from fbbench.grading import (
+    DEFAULT_GRADE_URL, capability_set, find_bug, solved as oracle_solved,
+)
 from fbbench.models import cost_usd
 from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
@@ -405,7 +407,7 @@ def _best_caps(alias: str, blobs: list[str],
                 f"(blob {i}: {os.path.basename(b)}) via {GRADE_URL}: {e}"
             ) from e
         caps = resp.get("capabilities", {})
-        target = bool(resp.get("target_bug_found", False))
+        target = oracle_solved(resp)
         ts = sum(1 for f in FLAGS if caps.get(f) == "fired")
         if poc_root is not None:
             sub = poc_root / ("solved" if target else "failed")

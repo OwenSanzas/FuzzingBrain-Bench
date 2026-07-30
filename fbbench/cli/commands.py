@@ -12,6 +12,7 @@ from fbbench.cli.console import (
 from fbbench.env import detect_provider, read_dotenv
 from fbbench.grading import (
     capability_set, find_bug, grade_blob, list_bugs, read_bench,
+    solved as oracle_solved,
 )
 from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
@@ -136,10 +137,10 @@ def cmd_grade(args) -> int:
                 print(f"    {dim(flag + ':'):<10s} {ev[flag]}")
 
     agreed = r.get("agreed", False)
-    # Authoritative: the oracle's target_bug_found (a single input reproduced the
-    # full defect). Fall back to caps-all-fired only if the field is absent.
-    if "target_bug_found" in r:
-        kb_ok = bool(r["target_bug_found"])
+    # Authoritative: the oracle's own solve flag (a single input reproduced the
+    # full defect). Fall back to caps-all-fired only if neither name is present.
+    if "solved" in r or "target_bug_found" in r:
+        kb_ok = oracle_solved(r)
     else:
         kb_ok = all(caps.get(c) == "fired" for c in K_b) and agreed
     summary_color = green if kb_ok else red
