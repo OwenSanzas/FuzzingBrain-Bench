@@ -85,14 +85,17 @@ Models: `claude-haiku-4-5` · `claude-sonnet-4-6` · `claude-opus-4-7` ·
 matrix of size one, so there is no separate "sweep" command:
 
 ```bash
-# one model over all 69 challenges (resumable: rerun with the same --output to skip done)
-fb-bench run all --model claude-haiku-4-5 --output run1
+# recommended full run: one model over the whole corpus, named output,
+# --no-stop-on-solve so the agent keeps hunting every rung past the first
+# solve, PoCs preserved (the default) for later inspection
+fb-bench run all --model claude-haiku-4-5 --output run1 \
+    --max-turns 100 --no-stop-on-solve
 
 # the curated cross-model roster, all challenges, 4 cells in parallel
-fb-bench run all --model default-lineup --output sweep1 --jobs 4
+fb-bench run all --model default-lineup --output sweep1 --jobs 4 --no-stop-on-solve
 
 # a couple of bugs, 3 samples each
-fb-bench run avro-03,jq-01 --model gpt-5.5 --samples 3
+fb-bench run avro-03,jq-01 --model gpt-5.5 --samples 3 --output probe
 
 # just re-print the leaderboard from an existing run
 fb-bench run all --model claude-haiku-4-5 --output run1 --report-only
@@ -102,20 +105,23 @@ fb-bench run all --model claude-haiku-4-5 --output run1 --report-only
 `default-lineup`, or `all`. Results land in `output/<name>/<bug>/<model>/seed-N/`
 (`score.json`, `episode.jsonl`, `transcript.jsonl`, `cost.json`, distilled
 `traj.md`); a leaderboard is printed at the end. `--output` takes a bare name
-(nested under `output/`) or a path (used as-is), and re-running the same
-`--output` resumes it.
+(nested under `output/`) or a path (used as-is). **Every run gets its own
+folder**: omit `--output` and it lands in `output/run_<timestamp>`; name a folder
+that already exists and a fresh run forks `<name>_<timestamp>` rather than
+resuming into it — so two runs never share results (`--report-only` is the one
+reader, opening a folder in place).
 
 ### 4. Agent modes — same `run`, pick the backend with `--arm`
 
 The three agent backends share **one entry**. `--arm` selects which one drives
 the challenge; everything else (`<bugs>`, `--jobs`, `--samples`, `--output`,
-resume, the leaderboard) is identical across arms.
+the per-run folder, the leaderboard) is identical across arms.
 
 ```bash
 fb-bench run avro-03 --model gpt-5.5            # --arm api (default): provider model
 fb-bench run avro-03 --arm codex               # OpenAI codex CLI (default gpt-5.5)
 fb-bench run avro-03 --arm claudecode --model sonnet --auth sub   # Claude Code CLI
-fb-bench run all     --arm codex --jobs 4      # whole corpus, batched, resumable
+fb-bench run all     --arm codex --jobs 4      # whole corpus, batched
 ```
 
 - **`--arm codex`** drives OpenAI's `codex exec` over the bench MCP server.
