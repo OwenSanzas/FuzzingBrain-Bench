@@ -60,6 +60,9 @@ def main() -> int:
     # description is withheld and the agent finds the crash from the harness +
     # source alone. diffscan (delta-N) is a reserved extension point, not yet
     # implemented (see prompts.build_diffscan_message).
+    ap.add_argument("--batch", default=None,
+                    help="uid of the sweep this cell belongs to; the orchestrator "
+                         "registers the sweep's flags under it once")
     ap.add_argument("--seed", type=int, default=None,
                     help="which sample of this (bug, model) cell this run is; recorded "
                          "with the run id so repeats can be told apart")
@@ -107,6 +110,7 @@ def main() -> int:
     # unforgeable — it decides no verdict, only how results are grouped.
     run_identity = {
         "uid": uuid.uuid4().hex,
+        "batch": args.batch or "",
         "model": args.model,
         "arm": "api",
         "seed": str(args.seed) if args.seed is not None else "",

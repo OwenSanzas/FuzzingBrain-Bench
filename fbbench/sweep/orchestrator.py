@@ -11,13 +11,16 @@ index (kept named `seed-N` for back-compat with the legacy 518-row dataset).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
+import urllib.request
+import uuid
 from pathlib import Path
 
 from fbbench.grading import (
-    DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
+    DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
@@ -84,7 +87,7 @@ def bug_kb(bug: str) -> list[str]:
 
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
-             seed: int | None = None,
+             seed: int | None = None, batch: str | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = True,
              api_key: str | None = None, image_prefix: str | None = None,
              runner: list[str] | None = None) -> list[str]:
@@ -94,6 +97,8 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
                                 "--max-turns", str(max_turns), "--out-dir", str(cd)]
     if seed is not None:
         cmd += ["--seed", str(seed)]
+    if batch:
+        cmd += ["--batch", batch]
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
     if not stop_on_solve:
         cmd.append("--no-stop-on-solve")
@@ -107,10 +112,11 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
              stop_on_solve: bool = True, api_key: str | None = None,
-             image_prefix: str | None = None, runner: list[str] | None = None) -> dict | None:
+             image_prefix: str | None = None, runner: list[str] | None = None,
+             batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
-    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample, preserve_pocs=preserve_pocs,
-                   stop_on_solve=stop_on_solve,
+    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample, batch=batch,
+                   preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
                    api_key=api_key, image_prefix=image_prefix, runner=runner)
     try:
         subprocess.run(cmd, cwd=REPO, timeout=timeout,
@@ -165,6 +171,29 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
     print("=" * 82)
 
 
+def register_batch(name: str, params: dict) -> str:
+    """Mint an id for this sweep and tell the oracle what flags defined it.
+
+    Returns the id whether or not registration succeeded. Best-effort on purpose:
+    a sweep that cannot reach the grader should still run — it loses the ability
+    to explain its own numbers later, which is worse than not running only if you
+    squint. The cells carry the id regardless, so the grades still group.
+    """
+    batch_uid = uuid.uuid4().hex
+    url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
+    body = json.dumps({"batch_uid": batch_uid, "name": name, "params": params}).encode()
+    req = urllib.request.Request(
+        f"{url}/v1/batches", data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "ngrok-skip-browser-warning": "true"})
+    try:
+        urllib.request.urlopen(req, timeout=30).close()
+    except Exception as e:  # noqa: BLE001 — nothing here is worth failing a sweep for
+        print(f"  note: could not register this batch ({e}); results will still group "
+              f"under {batch_uid[:12]} but their flags will not be recorded")
+    return batch_uid
+
+
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                output: str | None = None, max_turns: int = 100, timeout: int = 1800,
                jobs: int = 1, dashboard_pref: bool | None = None,
@@ -201,6 +230,15 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     done = sum(1 for m, b, s in cells if (cell_dir(out, b, m, s) / "score.json").is_file())
     print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
           f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
+
+    # One id for the whole matrix, so every grade it produces rolls up to the
+    # flags that defined it. A resumed sweep gets a NEW id: it is a different
+    # experiment in wall-clock terms even when the cells are the same.
+    batch_uid = register_batch(out.name, {
+        "models": models, "bugs": len(bugs), "samples": samples,
+        "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
+        "stop_on_solve": stop_on_solve, "output": str(out),
+    })
 
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
@@ -243,7 +281,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                            api_key=api_key, image_prefix=image_prefix, runner=runner)
+                            api_key=api_key, image_prefix=image_prefix, runner=runner,
+                            batch=batch_uid)
         except Exception as e:  # noqa: BLE001
             import traceback
             traceback.print_exc()
@@ -287,7 +326,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 tag = f"[{i}/{len(cells)}] {model} / {bug} / sample-{sample}"
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
-                    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample,
+                    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample, batch=batch_uid,
                                    preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
                                    api_key=api_key, image_prefix=image_prefix, runner=runner)

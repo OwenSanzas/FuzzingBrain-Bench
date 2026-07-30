@@ -42,10 +42,11 @@ func (s *server) gradeRemote(abs string) (any, error) {
 	// like a separate attempt. The agent cannot see or set these: they arrive as
 	// container environment, and nothing in the tool surface exposes them.
 	for header, env := range map[string]string{
-		"FB-Run-Uid": "BENCH_RUN_UID",
-		"FB-Model":   "BENCH_RUN_MODEL",
-		"FB-Arm":     "BENCH_RUN_ARM",
-		"FB-Seed":    "BENCH_RUN_SEED",
+		"FB-Run-Uid":   "BENCH_RUN_UID",
+		"FB-Batch-Uid": "BENCH_RUN_BATCH",
+		"FB-Model":     "BENCH_RUN_MODEL",
+		"FB-Arm":       "BENCH_RUN_ARM",
+		"FB-Seed":      "BENCH_RUN_SEED",
 	} {
 		if v := os.Getenv(env); v != "" {
 			req.Header.Set(header, v)
