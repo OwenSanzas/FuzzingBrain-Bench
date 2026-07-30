@@ -30,17 +30,20 @@ def resolve_output(value: str | None) -> Path:
 
     One knob controls where results land (there is no separate namespace flag):
 
-      - not given            -> the default ``output/`` root (results accumulate
-                                there and re-runs resume)
-      - a bare name          -> nested under the default root, e.g.
+      - a bare name          -> nested under the default ``output/`` root, e.g.
                                 ``paper-v1`` -> ``output/paper-v1`` (a named campaign)
       - a path               -> used as-is; a value is treated as a path when it
                                 contains a separator, is absolute, is ``.``/``..``,
                                 or starts with ``~`` (e.g. ``/data/x``, ``./x``,
                                 ``output/paper-v1``)
+      - not given            -> the ``output/`` root itself (a fallback; the run
+                                engine never calls it this way — it always mints an
+                                auto name ``run_<timestamp>`` instead)
 
     So ``paper-v1`` and ``output/paper-v1`` resolve to the same place, and a bare
-    name never accidentally lands in the cwd.
+    name never accidentally lands in the cwd. Collision handling (forking a fresh
+    ``<name>_<timestamp>`` when the folder already exists) lives in the run engine,
+    not here — this stays a pure path resolver.
     """
     default = REPO / "output"
     if not value:

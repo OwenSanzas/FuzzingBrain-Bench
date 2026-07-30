@@ -216,7 +216,23 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     """
     if samples < 1:
         raise ValueError("samples must be >= 1 (a repeat count, not a seed index)")
-    out = resolve_output(output)
+    # One run, one self-contained folder, never a collision — named and un-named
+    # runs behave identically:
+    #   * no --output   -> an auto name output/run_<timestamp>
+    #   * --output NAME -> output/NAME, but if that already exists a real run
+    #                      forks output/NAME_<timestamp> instead of resuming into
+    #                      (or overwriting) the earlier campaign.
+    # A fresh timestamp never collides, so the summary always lives in this run's
+    # own folder and no two runs share results. --report-only is the sole reader:
+    # it must open the existing folder in place, so it never forks.
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if output is None:
+        out = resolve_output(f"run_{ts}")
+    else:
+        out = resolve_output(output)
+        if not report_only and out.exists():
+            out = out.parent / f"{out.name}_{ts}"
     print(f"  output: {out}")
     seeds = list(range(samples))  # N -> seed indices [0 .. N-1]
 
