@@ -366,7 +366,7 @@ def _remote_grade(alias: str, data: bytes) -> dict:
     """POST a candidate blob to the REMOTE oracle; return its full verdict dict
     (capabilities, capabilities_bestof, target_bug_found, ...)."""
     req = urllib.request.Request(
-        f"{GRADE_URL}/grade?bug={alias}", data=data,
+        f"{GRADE_URL}/v1/challenges/{alias}/grade", data=data,
         headers={"Content-Type": "application/octet-stream",
                  "ngrok-skip-browser-warning": "true"})
     with urllib.request.urlopen(req, timeout=300) as r:

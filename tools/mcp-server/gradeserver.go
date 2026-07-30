@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -23,10 +24,11 @@ func (s *server) gradeRemote(abs string) (any, error) {
 	if s.bugID == "" {
 		return nil, fmt.Errorf("BENCH_BUG_ID must be set for remote grading")
 	}
-	// Agent sees the tool as run_poc_on_harness; the oracle HTTP endpoint is an
-	// internal detail the agent never sees, so it stays /grade.
-	url := s.gradeURL + "/grade?bug=" + s.bugID
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	// The oracle's grading endpoint. The alias is a path segment, so escape it
+	// rather than interpolating raw. (The agent never sees this URL — it only ever
+	// calls the tool by name, run_poc_on_harness.)
+	endpoint := s.gradeURL + "/v1/challenges/" + url.PathEscape(s.bugID) + "/grade"
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}

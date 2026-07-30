@@ -21,7 +21,7 @@ from fbbench.grading.bench_yaml import find_bug, capability_set  # noqa: E402
 from fbbench.runner.mcp_client import _full_scan_alias  # noqa: E402
 
 def remote_grade(url, bug, poc_bytes):
-    req = urllib.request.Request(f"{url}/grade?bug={bug}", data=poc_bytes,
+    req = urllib.request.Request(f"{url}/v1/challenges/{bug}/grade", data=poc_bytes,
                                  headers={"Content-Type": "application/octet-stream"})
     with urllib.request.urlopen(req, timeout=300) as r:
         return json.load(r)
