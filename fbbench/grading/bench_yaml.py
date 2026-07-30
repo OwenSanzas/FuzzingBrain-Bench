@@ -1,6 +1,6 @@
 """bench.yaml reading + bug discovery, with no external YAML dependency.
 
-bench.yaml top-levels we need (title, project, capability_set, ...) are flat
+bench.yaml top-levels we need (project, capability_set, ...) are flat
 scalars or one-line [lists], so a tiny ad-hoc reader avoids pulling PyYAML
 into the stdlib-only CLI path. This replaces the four near-identical readers
 that used to live in fb-bench, the runner, and the sweep scripts.

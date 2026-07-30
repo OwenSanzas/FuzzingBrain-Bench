@@ -30,17 +30,17 @@ def _require_bug(bug_id: str) -> Path:
 def cmd_list(_args) -> int:
     bugs = list_bugs()
     print(bold(f"\n  {len(bugs)} bugs available\n"))
-    print(f"  {'bug_id':<38s}  {'K_b':<28s}  title")
+    print(f"  {'bug_id':<38s}  {'K_b':<28s}  project")
     print(f"  {'-'*38}  {'-'*28}  -----")
     for bug_id, bd in bugs:
         try:
             bench = read_bench(bd / "bench.yaml")
-            title = bench.get("title", "")
+            project = bench.get("project", "")
             K_b = bench.get("capability_set", [])
         except Exception:
-            title, K_b = "", []
+            project, K_b = "", []
         flags = ",".join(K_b) if K_b else "?"
-        print(f"  {bug_id:<38s}  {cyan(flags):<{28 + len(cyan(flags)) - len(flags)}}  {dim(title)}")
+        print(f"  {bug_id:<38s}  {cyan(flags):<{28 + len(cyan(flags)) - len(flags)}}  {dim(project)}")
     print()
     return 0
 
@@ -50,7 +50,7 @@ def cmd_show(args) -> int:
     bench = read_bench(bd / "bench.yaml")
 
     print()
-    print(bold(f"  {bench.get('title', args.bug_id)}"))
+    print(bold(f"  {args.bug_id}"))
     print(dim(f"  {bench.get('upstream_report', '')}"))
     print()
     print(f"  {'bug_id':<18s} {bench.get('bug_id')}")
