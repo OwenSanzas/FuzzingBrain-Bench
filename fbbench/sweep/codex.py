@@ -106,7 +106,7 @@ persistence = "none"
 # ephemeral (--rm) container for post-hoc re-grading.
 [mcp_servers.harness]
 command = "docker"
-args = ["run", "-i", "--rm", "--security-opt", "seccomp=unconfined", "-v", "{ws}:/workspace", "{image}", "mcp-server"]
+args = ["run", "-i", "--rm", "--pull=always", "--security-opt", "seccomp=unconfined", "-v", "{ws}:/workspace", "{image}", "mcp-server"]
 tool_timeout_sec = 300
 startup_timeout_sec = 60
 """

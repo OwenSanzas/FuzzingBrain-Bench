@@ -79,6 +79,12 @@ class MCPClient:
         self._cid_dir = tempfile.mkdtemp(prefix="fbcid-")
         self._cidfile = os.path.join(self._cid_dir, "cid")
         cmd = ["docker", "run", "-i", "--rm",
+               # Always fetch the latest published image. Without this, a stale
+               # locally-cached <image>:latest is reused silently — and an old
+               # image bakes an old mcp-server that still POSTs the retired
+               # /grade?bug= endpoint (now 404). --pull=always keeps the baked
+               # grade client in sync with the backend.
+               "--pull=always",
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
                "-e", "BENCH_GRADE_REVEAL=1"]

@@ -127,7 +127,7 @@ def stage_claude_env(real_bug_dir: str, model: str) -> tuple[str, str, str, str]
     mcp_cfg = os.path.join(root, "bench.mcp.json")
     with open(mcp_cfg, "w") as f:
         json.dump({"mcpServers": {"bench": {"command": "docker", "args": [
-            "run", "-i", "--rm", "--security-opt", "seccomp=unconfined",
+            "run", "-i", "--rm", "--pull=always", "--security-opt", "seccomp=unconfined",
             "-v", f"{work}:/workspace", image, "mcp-server"]}}}, f)
     return image, root, work, mcp_cfg
 
