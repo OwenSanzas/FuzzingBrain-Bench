@@ -253,8 +253,9 @@ def run_episode(
     pocs_dir: str | None = None,
     stop_on_solve: bool = True,
     mode: str = "full-scan",
+    run: dict[str, str] | None = None,
 ) -> EpisodeResult:
-    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
+    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image, run=run)
     mcp.initialize()
     kb: set[str] = set(capability_set or DEFAULT_KB)
     poc_root: Path | None = Path(pocs_dir) if pocs_dir else None

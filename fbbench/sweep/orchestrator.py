@@ -54,8 +54,9 @@ def cell_dir(out: Path, bug: str, model: str, sample: int) -> Path:
     """Per-cell output dir. `sample` indexes repeat runs of (bug, model).
 
     Keeps the legacy `seed-N` directory naming for back-compat with the
-    518 existing data points; the integer no longer drives sampling
-    (runner has no --seed arg) — it is purely a directory label."""
+    518 existing data points. It still does not drive sampling — it is which
+    repeat this is, forwarded to the runner as --seed so the oracle can tell
+    one cell's repeats apart in its own records."""
     return out / bug / model / f"seed-{sample}"
 
 
@@ -83,6 +84,7 @@ def bug_kb(bug: str) -> list[str]:
 
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
+             seed: int | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = True,
              api_key: str | None = None, image_prefix: str | None = None,
              runner: list[str] | None = None) -> list[str]:
@@ -90,6 +92,8 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
     truth so the single and multi paths forward the SAME per-cell flags."""
     cmd = (runner or RUNNER) + ["--bug", bug, "--model", model,
                                 "--max-turns", str(max_turns), "--out-dir", str(cd)]
+    if seed is not None:
+        cmd += ["--seed", str(seed)]
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
     if not stop_on_solve:
         cmd.append("--no-stop-on-solve")
@@ -105,7 +109,7 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              stop_on_solve: bool = True, api_key: str | None = None,
              image_prefix: str | None = None, runner: list[str] | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
-    cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
+    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample, preserve_pocs=preserve_pocs,
                    stop_on_solve=stop_on_solve,
                    api_key=api_key, image_prefix=image_prefix, runner=runner)
     try:
@@ -283,7 +287,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 tag = f"[{i}/{len(cells)}] {model} / {bug} / sample-{sample}"
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
-                    cmd = cell_cmd(model, bug, cd, max_turns, preserve_pocs=preserve_pocs,
+                    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample,
+                                   preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
                                    api_key=api_key, image_prefix=image_prefix, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,

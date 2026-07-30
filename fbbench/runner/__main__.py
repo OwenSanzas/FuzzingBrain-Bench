@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
 from pathlib import Path
 
 from fbbench.env import load_dotenv
@@ -59,6 +60,9 @@ def main() -> int:
     # description is withheld and the agent finds the crash from the harness +
     # source alone. diffscan (delta-N) is a reserved extension point, not yet
     # implemented (see prompts.build_diffscan_message).
+    ap.add_argument("--seed", type=int, default=None,
+                    help="which sample of this (bug, model) cell this run is; recorded "
+                         "with the run id so repeats can be told apart")
     ap.add_argument("--mode", default="full-scan", choices=("full-scan", "diffscan"),
                     help="agent context mode (default: full-scan / blind)")
     ap.add_argument("--repo-root", default=None,
@@ -97,6 +101,16 @@ def main() -> int:
 
     backend = make_backend(args.model, api_key=args.api_key)
     pocs_dir = (out_dir / "pocs") if args.preserve_pocs else None
+    # One id per episode, so the oracle can group this run's submissions. Minted
+    # here rather than per grade: the point is that twenty inputs from one run
+    # are one attempt at the challenge, not twenty. Nothing depends on it being
+    # unforgeable — it decides no verdict, only how results are grouped.
+    run_identity = {
+        "uid": uuid.uuid4().hex,
+        "model": args.model,
+        "arm": "api",
+        "seed": str(args.seed) if args.seed is not None else "",
+    }
     # Everything (challenge surface, workspace, remote grading) lives in the
     # image; the host stages nothing. bug_dir="/src" is the in-container view.
     ep_bug_dir = "/src"
@@ -113,6 +127,7 @@ def main() -> int:
         pocs_dir=str(pocs_dir) if pocs_dir else None,
         stop_on_solve=args.stop_on_solve,
         mode=args.mode,
+        run=run_identity,
     )
 
     score = {

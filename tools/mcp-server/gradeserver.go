@@ -36,6 +36,21 @@ func (s *server) gradeRemote(abs string) (any, error) {
 	// ngrok free/dev domains show an HTML interstitial to browser-like requests;
 	// this header skips it so the JSON always comes back clean.
 	req.Header.Set("ngrok-skip-browser-warning", "true")
+	// Which episode this submission belongs to, forwarded from the runner's
+	// environment. The oracle needs it to tell "one run submitted twenty inputs"
+	// from "twenty runs each submitted one" — without it every submission looks
+	// like a separate attempt. The agent cannot see or set these: they arrive as
+	// container environment, and nothing in the tool surface exposes them.
+	for header, env := range map[string]string{
+		"FB-Run-Uid": "BENCH_RUN_UID",
+		"FB-Model":   "BENCH_RUN_MODEL",
+		"FB-Arm":     "BENCH_RUN_ARM",
+		"FB-Seed":    "BENCH_RUN_SEED",
+	} {
+		if v := os.Getenv(env); v != "" {
+			req.Header.Set(header, v)
+		}
+	}
 	cl := &http.Client{Timeout: 600 * time.Second}
 	resp, err := cl.Do(req)
 	if err != nil {

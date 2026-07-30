@@ -39,8 +39,27 @@ def _full_scan_alias(real_bug_dir: str) -> str:
     return f"{project}-{idx:02d}"
 
 
+def run_env_args(run: dict[str, str] | None) -> list[str]:
+    """`docker run` -e flags carrying this episode's identity into the container.
+
+    The in-image mcp-server reads these and forwards them to the oracle as
+    FB-Run-* headers, which is how one run's twenty submissions are told apart
+    from twenty runs' one each. Passed as container environment, never through
+    the tool surface: the agent has no way to read or forge them, and no part of
+    the challenge changes because they are set.
+
+    Shared so the api arm and the vendor arms cannot drift on the variable names.
+    """
+    args: list[str] = []
+    for key, value in (run or {}).items():
+        if value:
+            args += ["-e", f"BENCH_RUN_{key.upper()}={value}"]
+    return args
+
+
 class MCPClient:
-    def __init__(self, bug_dir: str, workspace: str, *, image: str):
+    def __init__(self, bug_dir: str, workspace: str, *, image: str,
+                 run: dict[str, str] | None = None):
         # Drive the PUBLIC challenge image's own mcp-server over stdio. The
         # challenge surface + BENCH_* (incl. the remote BENCH_GRADE_URL) are baked
         # into the image, so what we measure is byte-identical to what any external
@@ -62,8 +81,9 @@ class MCPClient:
         cmd = ["docker", "run", "-i", "--rm",
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
-               "-e", "BENCH_GRADE_REVEAL=1",
-               image, "mcp-server"]
+               "-e", "BENCH_GRADE_REVEAL=1"]
+        cmd += run_env_args(run)
+        cmd += [image, "mcp-server"]
         bug_dir, workspace = "/src", "/workspace"
         self._proc = subprocess.Popen(
             cmd,
