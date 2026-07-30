@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from fbbench.grading import graded_flags
 from fbbench.runner.traj import GRADE_TOOLS, build_traj, _grade_out
 
 LADDER = ["reach", "crash", "differential", "class", "site"]
@@ -309,13 +310,11 @@ def build_report_html(run_dir: Path) -> str:
                 kb = sorted(e.get("capability_set", []) or [])
                 break
 
-    # Authoritative applicable K_b comes from the oracle's caps: any tier it does
-    # not grade for this bug is "n/a". Prefer that over the runner's logged
-    # capability_set (a local DEFAULT_KB guess that has drifted). Fall back to the
-    # logged kb only when caps carry no verdict yet (e.g. an aborted run).
-    applicable_kb = [k for k in LADDER if caps.get(k) not in (None, "n/a")]
-    if applicable_kb:
-        kb = applicable_kb
+    # One rule for "which rungs does this bug have", shared with the sweep
+    # leaderboard and the live dashboard: the oracle's "n/a" markers win, the
+    # declared capability_set answers when there is no verdict. Getting this wrong
+    # is how a fully-solved 2-rung challenge ends up displayed as 2/5.
+    kb = graded_flags(caps, kb or (score.get("config") or {}).get("capability_set"))
 
     grades = [n for n in nodes if n["tool"] in GRADE_TOOLS]
     faults = [n for n in grades if n["crash"]]
@@ -383,7 +382,7 @@ def build_report_html(run_dir: Path) -> str:
     if caps_bestof:
         ladder_bestof_html = (
             '<div class="sub" style="margin-top:14px">best-of '
-            f'&mdash; fired on any round ({tier_bestof}/5)</div>'
+            f'&mdash; fired on any round ({tier_bestof}/{len(kb)})</div>'
             + _ladder_html(caps_bestof, kb)
         )
 
@@ -394,6 +393,7 @@ def build_report_html(run_dir: Path) -> str:
         config=config_html,
         ladder=_ladder_html(caps, kb),
         ladder_bestof=ladder_bestof_html,
+        n_kb=len(kb) or len(LADDER),
         reason=_esc(reason), dur=f"{dur:.1f}",
         refus=score.get("refusal_retries", 0), malf=score.get("malformed_retries", 0),
         in_tok=f"{in_tok:,}", out_tok=f"{out_tok:,}", cache_r=f"{cache_r:,}",
@@ -499,7 +499,7 @@ color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:4px
 {err_card}
 
 <div class="stats">
-  <div class="stat"><div class="n {verdict_cls}">{tier}/5</div><div class="l">tier score</div></div>
+  <div class="stat"><div class="n {verdict_cls}">{tier}/{n_kb}</div><div class="l">tier score</div></div>
   <div class="stat"><div class="n">{turns}</div><div class="l">turns used</div></div>
   <div class="stat"><div class="n a">{ncalls}</div><div class="l">tool calls</div></div>
   <div class="stat"><div class="n p">${usd}</div><div class="l">total cost</div></div>

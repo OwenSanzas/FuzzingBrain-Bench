@@ -31,6 +31,8 @@ from typing import Iterator
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
+
+from fbbench.grading import graded_flags
 from rich.text import Text
 
 # The capability ladder, strongest-last, with the single-letter column heads
@@ -83,6 +85,11 @@ class Cell:
     @property
     def key(self) -> tuple[str, str, int]:
         return (self.model, self.bug, self.sample)
+
+    @property
+    def n_graded(self) -> int:
+        """How many rungs THIS bug is graded on — never assume the full ladder."""
+        return len(graded_flags(self.caps, self.kb))
 
     @property
     def solved(self) -> bool:
@@ -185,7 +192,8 @@ class SweepStatus:
             self._recent.append(c.key)
             glyph = "✓" if c.phase == "done" else "✗"
             style = "green" if c.solved else ("red" if c.phase == "error" else "yellow")
-            tail = c.error if c.phase == "error" else f"tier {c.tier}/5 · {c.reason}"
+            tail = (c.error if c.phase == "error"
+                    else f"tier {c.tier}/{c.n_graded} · {c.reason}")
             self.log(f"{glyph} {bug} · {model} · {tail} · ${c.cost:.4f}", style)
 
     def cell_skip(self, model: str, bug: str, sample: int) -> None:
@@ -335,7 +343,7 @@ class SweepStatus:
                     c.bug,
                     c.model,
                     self._ladder_text(c),
-                    Text(f"{c.tier}/5", style="green" if c.solved else "dim"),
+                    Text(f"{c.tier}/{c.n_graded}", style="green" if c.solved else "dim"),
                     Text(f"${c.cost:.4f}", style="dim"),
                     Text(c.error or c.reason, style="dim", no_wrap=True),
                 )

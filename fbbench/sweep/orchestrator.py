@@ -16,7 +16,9 @@ import sys
 import time
 from pathlib import Path
 
-from fbbench.grading import DEFAULT_KB, capability_set, find_bug, list_bugs
+from fbbench.grading import (
+    DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
+)
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
 
@@ -66,6 +68,12 @@ def _seed_solved(s: dict) -> bool:
     caps = s.get("capabilities", {})
     applicable = {k: v for k, v in caps.items() if v != "n/a"}
     return bool(applicable) and all(v == "fired" for v in applicable.values())
+
+
+def _denom(score: dict) -> int:
+    """Tier denominator for one cell: the rungs its bug is graded on, not 5."""
+    return len(graded_flags(score.get("capabilities") or {},
+                            (score.get("config") or {}).get("capability_set")))
 
 
 def bug_kb(bug: str) -> list[str]:
@@ -255,7 +263,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
             print(f"  [{i}/{len(cells)}] start {model} / {bug} / sample-{sample}", flush=True)
             r = _cell(model, bug, sample)
             if r and "error" not in r:
-                print(f"      -> [{bug}] {r.get('tier_score','?')}/5  "
+                print(f"      -> [{bug}] {r.get('tier_score','?')}/{_denom(r)}  "
                       f"{r.get('terminated_reason','')}  ${r.get('total_usd') or 0.0:.4f}",
                       flush=True)
             else:
@@ -285,7 +293,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                     print(f"  {tag} ...", flush=True)
                     r = _cell(model, bug, sample)
                     if r and "error" not in r:
-                        print(f"      -> {r.get('tier_score','?')}/5  {r.get('terminated_reason','')}  "
+                        print(f"      -> {r.get('tier_score','?')}/{_denom(r)}  {r.get('terminated_reason','')}  "
                               f"${r.get('total_usd') or 0.0:.4f}", flush=True)
                     else:
                         print(f"      -> FAILED: {r.get('error') if r else 'unknown'}", flush=True)
