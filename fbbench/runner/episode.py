@@ -517,9 +517,12 @@ def run_episode(
                     # verdict. This rebuilds the seal for the model, and is the
                     # one that matters in a real run -- the image's version only
                     # ever applies to an external user driving the image directly.
-                    # Keep it an allow-list, and keep it matching the field list
-                    # in tools/mcp-server/gradeserver.go: a field added there and
-                    # not here is invisible to every benchmark run.
+                    # Keep it an allow-list, and check it against the one in
+                    # tools/mcp-server/gradeserver.go whenever either moves: a
+                    # field added there and not here is invisible to every
+                    # benchmark run. The two are not identical on purpose --
+                    # duration_ms is forwarded there and withheld here, because
+                    # the model is not meant to tune against grading latency.
                     sealed = {"harness_output": out.get("harness_output", {})}
                     if out.get("crash_novelty"):
                         sealed["crash_novelty"] = out["crash_novelty"]

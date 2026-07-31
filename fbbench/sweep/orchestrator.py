@@ -294,6 +294,11 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # Persist it so `--report-only` months later can still ask the oracle what
     # this sweep found. Without it the id lives only in the cells' score.json,
     # and a report over a partially-deleted output tree loses the batch entirely.
+    #
+    # The tree is created here rather than left to the first cell: this is now
+    # the first write into it, and every cell dir is nested under it. Without
+    # this a fresh --output aborts the whole sweep before a single episode runs.
+    out.mkdir(parents=True, exist_ok=True)
     (out / "batch.json").write_text(json.dumps(
         {"batch_uid": batch_uid, "name": out.name}, indent=2) + "\n")
 
