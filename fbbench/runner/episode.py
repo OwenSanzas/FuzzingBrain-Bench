@@ -440,7 +440,11 @@ def run_episode(
             solved_hit = False   # a candidate this turn that IS the target defect
             for tc in comp.tool_calls:
                 try:
-                    out = mcp.call(tc.name, tc.input or {})
+                    # Which turn this submission came from. The oracle records it
+                    # so a find can be placed in the episode without replaying the
+                    # transcript; the budget it is measured against is already on
+                    # the batch. Turns are 1-based here to match the budget note.
+                    out = mcp.call(tc.name, tc.input or {}, meta={"turn": turn + 1})
                     is_error = False
                 except MCPToolError as e:
                     out = {"error": str(e), "data": e.data}

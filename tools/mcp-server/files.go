@@ -25,10 +25,10 @@ type writeFileParams struct {
 }
 
 const (
-	defaultReadLines = 2000        // max lines returned when `limit` is unset (Claude Code parity)
-	maxLineChars     = 2000        // per-line char cap; longer lines are truncated with a marker
-	maxReadBytes     = 128 * 1024  // total read_file output cap; lines x per-line could else hit ~4MB
-	maxDirEntries    = 1000        // list_directory entry cap; a huge dir would blow the context
+	defaultReadLines = 2000       // max lines returned when `limit` is unset (Claude Code parity)
+	maxLineChars     = 2000       // per-line char cap; longer lines are truncated with a marker
+	maxReadBytes     = 128 * 1024 // total read_file output cap; lines x per-line could else hit ~4MB
+	maxDirEntries    = 1000       // list_directory entry cap; a huge dir would blow the context
 )
 
 var errPermissionDenied = errors.New("permission denied")

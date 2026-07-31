@@ -4,15 +4,16 @@
 // convention. Implements the 6-tool contract from SPEC §4.
 //
 // Environment:
-//   BENCH_BUG_DIR    absolute path to the agent-facing bug dir (no oracle files)
-//   BENCH_WORKSPACE  absolute path to the runner's per-episode tmpdir
-//   BENCH_ORACLE_DIR absolute path the grader reads expected.yaml + binaries
-//                    from. Defaults to BENCH_BUG_DIR (so the no-AI fb-bench
-//                    CLI, which points BUG_DIR at the real bug dir, still works).
-//   BENCH_AGENT_UID  numeric uid to run exec() as. When set and the server is
-//   BENCH_AGENT_GID  root, exec subprocesses drop to this (uid,gid) so the
-//                    agent's shell cannot read root-owned oracle files even by
-//                    absolute path / `find /`. No-op when unset or not root.
+//
+//	BENCH_BUG_DIR    absolute path to the agent-facing bug dir (no oracle files)
+//	BENCH_WORKSPACE  absolute path to the runner's per-episode tmpdir
+//	BENCH_ORACLE_DIR absolute path the grader reads expected.yaml + binaries
+//	                 from. Defaults to BENCH_BUG_DIR (so the no-AI fb-bench
+//	                 CLI, which points BUG_DIR at the real bug dir, still works).
+//	BENCH_AGENT_UID  numeric uid to run exec() as. When set and the server is
+//	BENCH_AGENT_GID  root, exec subprocesses drop to this (uid,gid) so the
+//	                 agent's shell cannot read root-owned oracle files even by
+//	                 absolute path / `find /`. No-op when unset or not root.
 //
 // Diagnostics go to stderr; nothing else.
 package main
@@ -83,7 +84,6 @@ type server struct {
 func main() {
 	log.SetPrefix("mcp-server: ")
 	log.SetOutput(os.Stderr)
-
 
 	bugDir := os.Getenv("BENCH_BUG_DIR")
 	workspace := os.Getenv("BENCH_WORKSPACE")
@@ -190,6 +190,13 @@ func (s *server) dispatch(req *rpcRequest) {
 type toolCallParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// Facts about the episode that the RUNNER attaches, never the model. It
+	// travels beside `arguments` rather than inside them so it is outside the
+	// tool schema the agent fills in, which makes it unreadable and unforgeable
+	// from the agent's side.
+	Meta struct {
+		Turn int `json:"turn,omitempty"`
+	} `json:"_meta,omitempty"`
 }
 
 func (s *server) handleToolCall(req *rpcRequest) {
@@ -214,7 +221,7 @@ func (s *server) handleToolCall(req *rpcRequest) {
 	case "write_file":
 		result, err = s.toolWriteFile(p.Arguments)
 	case "run_poc_on_harness":
-		result, err = s.toolGrade(p.Arguments)
+		result, err = s.toolGrade(p.Arguments, p.Meta.Turn)
 	default:
 		s.writeError(req.ID, -32602, "unknown tool", p.Name)
 		return

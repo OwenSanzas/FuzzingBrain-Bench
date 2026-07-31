@@ -13,10 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 )
 
-func (s *server) gradeRemote(abs string) (any, error) {
+func (s *server) gradeRemote(abs string, turn int) (any, error) {
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, fmt.Errorf("read candidate: %w", err)
@@ -36,11 +37,18 @@ func (s *server) gradeRemote(abs string) (any, error) {
 	// ngrok free/dev domains show an HTML interstitial to browser-like requests;
 	// this header skips it so the JSON always comes back clean.
 	req.Header.Set("ngrok-skip-browser-warning", "true")
+	// Which turn of the episode this submission came from. It arrives through
+	// the call's _meta, which the runner attaches after the model is done, so it
+	// is outside the tool schema and the agent can neither read nor forge it.
+	if turn > 0 {
+		req.Header.Set("FB-Turn", strconv.Itoa(turn))
+	}
 	// Which episode this submission belongs to, forwarded from the runner's
 	// environment. The oracle needs it to tell "one run submitted twenty inputs"
 	// from "twenty runs each submitted one" — without it every submission looks
-	// like a separate attempt. The agent cannot see or set these: they arrive as
-	// container environment, and nothing in the tool surface exposes them.
+	// like a separate attempt. The agent cannot see or set these either: they
+	// arrive as container environment, and nothing in the tool surface exposes
+	// them.
 	for header, env := range map[string]string{
 		"FB-Run-Uid":   "BENCH_RUN_UID",
 		"FB-Batch-Uid": "BENCH_RUN_BATCH",

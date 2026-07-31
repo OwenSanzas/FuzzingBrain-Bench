@@ -118,9 +118,20 @@ class MCPClient:
     def list_tools(self) -> list[dict]:
         return self._call("tools/list", {})["tools"]
 
-    def call(self, name: str, arguments: dict) -> Any:
+    def call(self, name: str, arguments: dict, meta: dict | None = None) -> Any:
+        """Invoke a tool. `meta` rides alongside the call rather than inside it.
+
+        `arguments` is what the model produced and is bound by the tool's schema.
+        `_meta` is added here, after the model is done, so the agent can neither
+        read it nor set it — which is the whole point: it carries facts about the
+        episode (which turn this is) that the oracle wants and the agent must not
+        be able to forge.
+        """
         arguments = self._clamp_exec_timeout(name, arguments)
-        resp = self._call("tools/call", {"name": name, "arguments": arguments})
+        params: dict = {"name": name, "arguments": arguments}
+        if meta:
+            params["_meta"] = meta
+        resp = self._call("tools/call", params)
         return resp.get("structuredContent", resp)
 
     def copy_out(self, path: str, dest) -> bool:

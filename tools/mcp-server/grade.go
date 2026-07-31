@@ -17,7 +17,7 @@ type gradeParams struct {
 // answer-free: it holds no grading logic and no answer key. The candidate is
 // shipped to the remote oracle (BENCH_GRADE_URL), which judges it. There is no
 // local grading here — the grading engine lives only in the private backend.
-func (s *server) toolGrade(args []byte) (any, error) {
+func (s *server) toolGrade(args []byte, turn int) (any, error) {
 	var p gradeParams
 	if err := json.Unmarshal(args, &p); err != nil {
 		return nil, err
@@ -35,5 +35,5 @@ func (s *server) toolGrade(args []byte) (any, error) {
 	if s.gradeURL == "" {
 		return nil, fmt.Errorf("run_poc_on_harness requires a remote grader (BENCH_GRADE_URL is not set)")
 	}
-	return s.gradeRemote(abs)
+	return s.gradeRemote(abs, turn)
 }
