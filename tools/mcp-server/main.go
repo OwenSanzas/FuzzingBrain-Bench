@@ -315,7 +315,7 @@ func toolSchemas() []map[string]any {
 		},
 		{
 			"name":        "run_poc_on_harness",
-			"description": "Run a candidate input through the harness (its sanitizer and invocation config come from the setup task info), like running a fuzzer on one input. Returns the raw harness output (stdout, stderr, exit_code, signal) and duration_ms. It does NOT return a pass/fail verdict.",
+			"description": "Run a candidate input through the harness (its sanitizer and invocation config come from the setup task info), like running a fuzzer on one input. Returns the raw harness output (stdout, stderr, exit_code, signal) and duration_ms. It does NOT return a pass/fail verdict.\n\nThe input is run several times. If it faults, crash_novelty describes the result, relative only to what you yourself have already submitted in this session:\n  new             a crash you had not produced before\n  duplicate       the same crash you already produced; submitting it again adds nothing\n  flaky_rounds    faulted in only some of the runs, so it does not count; make it deterministic\n  flaky_location  faulted in every run but in a different place each time, so it does not count\nIt also reports crashed_rounds, total_rounds and distinct_crashes for this input. The field is absent when the input did not fault.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

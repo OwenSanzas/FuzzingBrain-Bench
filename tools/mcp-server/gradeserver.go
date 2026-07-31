@@ -74,15 +74,24 @@ func (s *server) gradeRemote(abs string, turn int) (any, error) {
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("remote grade decode: %w", err)
 	}
-	// Seal the verdict from the agent: return only harness_output + duration_ms
-	// unless the TRUSTED runner explicitly asked to reveal it (BENCH_GRADE_REVEAL=1).
+	// Seal the verdict from the agent: return only the allow-listed fields unless
+	// the TRUSTED runner explicitly asked to reveal it (BENCH_GRADE_REVEAL=1).
+	// This allow-list is the last gate on blind evaluation, so it stays an
+	// allow-list -- a field is forwarded because someone decided it may be, never
+	// because the oracle happened to send it.
+	//
+	// crash_novelty says whether THIS run has already produced the same crash.
+	// It carries nothing about the global pool, about other runs, or about which
+	// crash the challenge was built around; the agent could derive it by diffing
+	// its own stack traces, and forwarding it only makes that reliable. It is
+	// omitted when the oracle sends null -- there is a difference between "not a
+	// new crash" and "we cannot say", and the agent must not read one as the other.
 	if os.Getenv("BENCH_GRADE_REVEAL") != "1" {
 		sealed := map[string]any{}
-		if ho, ok := out["harness_output"]; ok {
-			sealed["harness_output"] = ho
-		}
-		if d, ok := out["duration_ms"]; ok {
-			sealed["duration_ms"] = d
+		for _, k := range []string{"harness_output", "duration_ms", "crash_novelty"} {
+			if v, ok := out[k]; ok && v != nil {
+				sealed[k] = v
+			}
 		}
 		return sealed, nil
 	}
