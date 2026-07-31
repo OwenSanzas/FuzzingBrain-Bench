@@ -10,6 +10,9 @@ line — is kept.
 
     canon_sig = sha256([class, [func, file, line], [func, file, line]])
 
+where `file` is the basename only — see `_norm_file` for why the directory is
+not part of a crash's identity.
+
 The rules below are not guesses: each one was derived by running this module's
 prototype over all 68 crash logs in the answers repo, and each failure it fixes
 is named in the comment. See `_internal/CRASH-DEDUP.md` for the full write-up.
@@ -51,7 +54,8 @@ KEEP_FRAMES = 4
 
 # Bumped whenever a rule below changes, so a half-rebuilt crash_signature table
 # is detectable (rows carry the version that produced them).
-SIG_VERSION = 1
+#   2: frame paths are reduced to their basename before hashing (_norm_file).
+SIG_VERSION = 2
 
 # Signature text is display-only — the sha256 is the key — so it can be cut. C++
 # templates demangle to hundreds of characters and would otherwise dominate.
@@ -230,6 +234,61 @@ def extract_frames(text: str) -> list[dict]:
     return frames[:KEEP_FRAMES]
 
 
+# C++ demanglers disagree about one space. LLVM 14 renders nested template
+# closers as `> >`, newer LLVM as `>>`, so the SAME function in the SAME binary
+# reads differently depending on which llvm-symbolizer resolved it:
+#
+#   ...basic_string<char, std::char_traits<char>, std::allocator<char> >&...
+#   ...basic_string<char, std::char_traits<char>, std::allocator<char>>&...
+#
+# The self-contained image ships llvm-14 (matching the clang the harnesses are
+# built with) while the grading backend has a newer toolchain, so three C++
+# challenges signed differently on the two sides for no reason to do with the
+# fault. Collapsing the space makes the two agree, and is idempotent for
+# whichever side already emits the compact form.
+_TEMPLATE_GAP = re.compile(r">\s+>")
+
+
+def _norm_func(func: str) -> str:
+    """A frame's function name, with toolchain-specific formatting removed."""
+    prev = None
+    while prev != func:                       # `> > >` needs more than one pass
+        prev = func
+        func = _TEMPLATE_GAP.sub(">>", func)
+    return func
+
+
+def _norm_file(path: str) -> str:
+    """The part of a frame's file that belongs to the crash: its basename.
+
+    A path says where the harness was graded, which is not a property of the
+    fault. The grading backend unpacks each run into a fresh temp dir, and a
+    self-contained image runs the harness from its own baked-in prefix, so ONE
+    fault signs three different ways:
+
+        /tmp/fbgrade-f4p96gu7/oracle/binaries/vuln/asan/harness+0xacb92
+        /tmp/fbgrade-q2wk1x8p/oracle/binaries/vuln/asan/harness+0xacb92
+        /opt/fbbench/oracle-root/cups-01/binaries/release-asan/harness+0xacb92
+
+    Keeping the directory made crash identity a property of the grading run
+    rather than of the crash. It went unnoticed because `sig_text` already cut
+    the path down to its basename while the hash did not, so two rows read
+    identically and still counted twice — and the hash is what dedups. Measured
+    on a live pool: 41 rows carried such a path, across 41 distinct temp dirs.
+    Not one of them had ever deduplicated against another.
+
+    The basename keeps everything that locates a fault — the source file, or the
+    module and the offset that stands in for a line number when a frame is
+    unsymbolized — and drops only the part that says where the grader put it.
+    Two source files sharing a basename would have to also share a function name
+    and a line number to collide, which the func and line in the key rule out.
+
+    `Signature.frames` keeps the paths unreduced, so this stays revisable from
+    stored rows: it is the same bargain KEEP_FRAMES makes for TOP_FRAMES.
+    """
+    return path.rsplit("/", 1)[-1]
+
+
 def _frame_keys(frames: list[dict], klass: str) -> list[tuple[str, str, int | None]]:
     """The (func, file, line) triples the signature is built from.
 
@@ -244,7 +303,7 @@ def _frame_keys(frames: list[dict], klass: str) -> list[tuple[str, str, int | No
     and `b->c->a->b` are the same crash seen from different starting points.
     Sorting the distinct frames makes the signature invariant to that rotation.
     """
-    keys = [(f["func"], f["file"], f["line"]) for f in frames]
+    keys = [(_norm_func(f["func"]), _norm_file(f["file"]), f["line"]) for f in frames]
     if klass in _STACK_EXHAUSTION:
         keys = sorted(set(keys))
     return keys[:TOP_FRAMES]
@@ -292,8 +351,13 @@ def signature(harness_output: dict) -> Signature | None:
     canon = hashlib.sha256(payload.encode()).hexdigest()
 
     if keys:
+        # Rendered from the SAME keys that were hashed, with no further trimming.
+        # These used to diverge — the text cut the path to a basename and the
+        # hash kept it — which is exactly what let a duplicate read as identical
+        # to a human and still count twice. Anything that shortens a key belongs
+        # in _norm_file, above the hash, so both sides see it.
         shown = " | ".join(
-            f"{fn}@{fl.rsplit('/', 1)[-1]}" + (f":{ln}" if ln is not None else "")
+            f"{fn}@{fl}" + (f":{ln}" if ln is not None else "")
             for fn, fl, ln in keys)
     else:
         shown = _NO_FRAMES

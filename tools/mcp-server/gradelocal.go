@@ -69,6 +69,19 @@ type oracleConfig struct {
 	// exit, so leaving it on globally flags error-path leaks in the harness and
 	// the library, and each one would count as a distinct crash.
 	DetectLeaks bool `yaml:"detect_leaks"`
+	// DOSTimeout marks a challenge whose defect IS taking too long — an
+	// algorithmic-complexity denial of service. For those, and ONLY those,
+	// exceeding TimeoutS is the finding rather than a failure to find anything.
+	//
+	// It has to be declared per challenge because there is no way to tell the
+	// two apart from the run alone: an input that takes forever is the answer on
+	// a DoS challenge and a wasted grade everywhere else. Counting every timeout
+	// as a crash would score slow inputs across all 68.
+	//
+	// Note that a finite-but-slow input does NOT print libFuzzer's own timeout
+	// message in single-input replay — that alarm only fires inside the fuzzing
+	// loop — so the wall-clock kill here is the only signal there is.
+	DOSTimeout bool `yaml:"dos_timeout"`
 }
 
 // defaultHarnessTimeoutS matches what the corpus uses for a challenge that
@@ -133,10 +146,14 @@ func (s *server) gradeLocal(abs string) (any, error) {
 	}
 
 	pinGradingEnv()
+	s.pinHarnessLibs()
 	cfg := s.oracleConfig()
 	start := time.Now()
-	run := runHarness(bin, bench.Harness.Invocation, poc, runDir, cfg.TimeoutS, cfg.DetectLeaks)
-	crashed := crashFired(run)
+	run := runHarnessRetryingFlakes(bin, bench.Harness.Invocation, poc, runDir,
+		cfg.TimeoutS, cfg.DetectLeaks)
+	// On a DoS challenge, running out the clock IS the finding.
+	dosHit := cfg.DOSTimeout && run.timedOut
+	crashed := crashFired(run) || dosHit
 
 	// The signature is derived from the RAW output: it names functions, files
 	// and lines, and the display scrub below rewrites paths. Signing the
@@ -156,6 +173,18 @@ func (s *server) gradeLocal(abs string) (any, error) {
 	if crashed {
 		sig, sigErr := s.signature(run)
 		switch {
+		case dosHit && sig == nil:
+			// A timed-out run was killed by the clock, so it printed no
+			// sanitizer report and there is nothing to name it by. Give it its
+			// own identity rather than the generic unnamed one: "took too long"
+			// and "crashed in a way we could not parse" are different findings,
+			// and sharing a bucket would let one mask the other.
+			out["crash_novelty"] = s.observe("timeout|<dos>")
+			if os.Getenv("BENCH_GRADE_REVEAL") == "1" {
+				out["crash_signature"] = "timeout|<dos>"
+				out["crash_signature_text"] = "timeout | <exceeded the challenge's gate>"
+				out["crash_class"] = "timeout"
+			}
 		case sigErr != nil:
 			// A crash we cannot name is still a crash. Counting it under a
 			// single fallback identity undercounts (every unnamed crash looks
@@ -296,6 +325,29 @@ type harnessRun struct {
 	timedOut       bool
 }
 
+// pinHarnessLibs puts the harness's own shared libraries on the search path.
+//
+// The harness is built in an image that apt-installed its project's
+// dependencies; the challenge image has none of them. A dynamically linked
+// harness — 20 of the 68 are — would then die with exit 127 and "cannot open
+// shared object file" the moment it is graded, which the grader reads as "this
+// input did not crash". A missing library must never be able to look like a
+// negative verdict, so the libraries travel with the binary and are found here.
+//
+// Appended to any existing LD_LIBRARY_PATH rather than replacing it, and only
+// when the directory exists, so a statically linked challenge is untouched.
+func (s *server) pinHarnessLibs() {
+	dir := filepath.Join(s.oracleDir, "binaries", "vuln", "sharedlibs")
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return
+	}
+	if cur := os.Getenv("LD_LIBRARY_PATH"); cur != "" {
+		os.Setenv("LD_LIBRARY_PATH", cur+string(os.PathListSeparator)+dir)
+	} else {
+		os.Setenv("LD_LIBRARY_PATH", dir)
+	}
+}
+
 // pinGradingEnv fixes the two environment settings that decide whether a crash
 // report is usable, both of which fail SILENTLY when wrong.
 //
@@ -337,6 +389,59 @@ func pinGradingEnv() {
 		}
 	}
 	os.Setenv("DEBUGINFOD_URLS", "")
+}
+
+// How many times to re-run a harness that died before it produced any output.
+// Three is enough to make the flake below vanishingly unlikely without turning a
+// genuinely broken harness into a slow one: at the ~15% per-launch rate measured
+// on the affected host, three attempts leaves roughly one grade in three hundred
+// still wrong, and a harness that cannot start at all still fails in well under
+// a second.
+const flakeAttempts = 3
+
+// isPreInitFlake reports whether a run died before executing the input.
+//
+// On kernels that set vm.mmap_rnd_bits to 32 (Ubuntu's 6.x/7.x), ASan's shadow
+// mapping collides with the randomized layout and the process dies IMMEDIATELY —
+// no sanitizer report, no libFuzzer banner, nothing on either stream. Measured on
+// the host this was developed against: roughly 5 of 30 launches of a trivial ASan
+// C++ binary, and 3 of 30 for C. It is per-launch and random, which is what makes
+// it dangerous: it does not look like a broken setup, it looks like a quarter of
+// your inputs not crashing.
+//
+// The signature is unmistakable and cannot be produced by a real finding: a real
+// fault on a sanitizer harness always leaves SOMETHING, at minimum libFuzzer's
+// startup banner, which is printed before the input is ever executed. So a
+// terminating signal with both streams empty is never a verdict about the input.
+//
+// crashFired() already refuses to call this a crash. That is correct but not
+// sufficient — it turns a lost run into "no crash", which reads as a real
+// negative. Retrying is what makes the measurement the input's rather than the
+// host's.
+func isPreInitFlake(r harnessRun) bool {
+	if r.signal == "" || r.timedOut {
+		return false
+	}
+	return strings.TrimSpace(r.stdout) == "" && strings.TrimSpace(r.stderr) == ""
+}
+
+// runHarnessRetryingFlakes runs the harness, retrying ONLY the pre-init flake
+// above. Every other outcome — a crash, a clean run, a timeout — is returned on
+// the first attempt, because those are answers about the input and re-running
+// them would be re-rolling a verdict we already have.
+func runHarnessRetryingFlakes(bin string, invocation []string, pocPath, runDir string,
+	timeoutS int, leaks bool) harnessRun {
+	var run harnessRun
+	for attempt := 1; attempt <= flakeAttempts; attempt++ {
+		run = runHarness(bin, invocation, pocPath, runDir, timeoutS, leaks)
+		if !isPreInitFlake(run) {
+			return run
+		}
+		log.Printf("harness died before producing output (attempt %d/%d, signal %s) — "+
+			"retrying; if this repeats, check vm.mmap_rnd_bits on the host",
+			attempt, flakeAttempts, run.signal)
+	}
+	return run
 }
 
 func runHarness(bin string, invocation []string, pocPath, runDir string, timeoutS int, leaks bool) harnessRun {

@@ -73,6 +73,34 @@ _CLEAN = {"exit_code": 0, "signal": "",
 _FLAKE = {"exit_code": -6, "signal": "ABRT", "stderr": "", "stdout": ""}
 
 
+def _unsym(harness_path: str, offset: str = "0xacb92") -> dict:
+    """One fault with an unsymbolized top-level frame, as seen from `harness_path`.
+
+    Where the grader unpacked the oracle is not part of the crash. The backend
+    uses a fresh temp dir per run and a self-contained image uses its own baked
+    prefix, so the same fault arrives under a different path every time.
+    """
+    return {
+        "exit_code": 1, "signal": "ABRT",
+        "stderr": f"""==12==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60d
+    #0 0x49 in __interceptor_memcpy compiler-rt/asan/asan_interceptors.cpp:8
+    #1 0x51 in cupsUTF8ToCharset /src/cups/cups/transcode.c:245:5
+    #2 0x52 in main ({harness_path}+{offset})
+SUMMARY: AddressSanitizer: heap-buffer-overflow /src/cups/cups/transcode.c:245:5""",
+        "stdout": "",
+    }
+
+
+# The same binary, the same offsets, two grading runs.
+_GRADED_REMOTE = _unsym("/tmp/fbgrade-f4p96gu7/oracle/binaries/vuln/asan/harness")
+_GRADED_REMOTE_AGAIN = _unsym("/tmp/fbgrade-q2wk1x8p/oracle/binaries/vuln/asan/harness")
+_GRADED_IN_IMAGE = _unsym("/opt/fbbench/oracle-root/cups-01/binaries/release-asan/harness")
+# A different offset IS a different code location — the counterpart of a line
+# number for an unsymbolized frame — and must stay a different crash.
+_GRADED_OTHER_SITE = _unsym("/tmp/fbgrade-f4p96gu7/oracle/binaries/vuln/asan/harness",
+                            offset="0x154627")
+
+
 def _text(run: dict) -> str | None:
     sig = signature(run)
     return sig.sig_text if sig else None
@@ -113,16 +141,32 @@ def main() -> int:
     for name, a, b in (
         ("same site, different type stays distinct", _BOF, _UAF),
         ("same fault, different caller stays distinct", _BOF, _BOF_OTHER_PATH),
+        ("different offset in one module stays distinct", _GRADED_REMOTE,
+         _GRADED_OTHER_SITE),
     ):
         distinct = signature(a).canon_sig != signature(b).canon_sig
         ok = ok and distinct
         print(f"  [{'PASS' if distinct else 'FAIL'}] {name}")
 
-    # Stability: the same output must sign the same way every time, or a run's
-    # own resubmission would read as a new find.
-    stable = signature(_BOF).canon_sig == signature(_BOF).canon_sig
-    ok = ok and stable
-    print(f"  [{'PASS' if stable else 'FAIL'}] the same output signs the same way")
+    # The counterpart property, and the one that actually bit: a crash must sign
+    # the same way wherever it was graded. Comparing a signature to itself only
+    # proves the function is deterministic, which no plausible bug breaks — what
+    # broke was one fault arriving under a different path per grading run and
+    # counting again every time.
+    for name, a, b in (
+        ("one crash, two grading runs", _GRADED_REMOTE, _GRADED_REMOTE_AGAIN),
+        ("one crash, graded remotely and in-image", _GRADED_REMOTE, _GRADED_IN_IMAGE),
+    ):
+        same = signature(a).canon_sig == signature(b).canon_sig
+        ok = ok and same
+        print(f"  [{'PASS' if same else 'FAIL'}] {name}")
+
+    # sig_text is what a human reads when a count looks wrong, so it has to be a
+    # rendering of the hashed keys and not a second, looser reduction of them.
+    # It was the two disagreeing that hid the bug above for as long as it hid.
+    agree = _text(_GRADED_REMOTE) == _text(_GRADED_IN_IMAGE)
+    ok = ok and agree
+    print(f"  [{'PASS' if agree else 'FAIL'}] the text says what the hash counts")
 
     print("signature:", "ALL PASS" if ok else "FAILURES")
     return 0 if ok else 1
