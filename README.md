@@ -85,14 +85,13 @@ Models: `claude-haiku-4-5` · `claude-sonnet-4-6` · `claude-opus-4-7` ·
 matrix of size one, so there is no separate "sweep" command:
 
 ```bash
-# recommended full run: one model over the whole corpus, named output,
-# --no-stop-on-solve so the agent keeps hunting every rung past the first
-# solve, PoCs preserved (the default) for later inspection
-fb-bench run all --model claude-haiku-4-5 --output run1 \
-    --max-turns 100 --no-stop-on-solve
+# recommended full run: one model over the whole corpus, named output, PoCs
+# preserved (the default) for later inspection. The agent keeps hunting past its
+# first solve unless you pass --stop-on-solve
+fb-bench run all --model claude-haiku-4-5 --output run1 --max-turns 100
 
 # the curated cross-model roster, all challenges, 4 cells in parallel
-fb-bench run all --model default-lineup --output sweep1 --jobs 4 --no-stop-on-solve
+fb-bench run all --model default-lineup --output sweep1 --jobs 4
 
 # a couple of bugs, 3 samples each
 fb-bench run avro-03,jq-01 --model gpt-5.5 --samples 3 --output probe
@@ -200,7 +199,8 @@ fb-bench run <bugs> \
     --samples 3 \             # repeat each (model, bug) N times
     --output my-experiment \  # results under output/my-experiment/ (name or path)
     --no-preserve-pocs \      # graded blobs are KEPT by default; pass this to drop them
-    --no-stop-on-solve        # keep hunting for more crashes after the first solve
+    --stop-on-solve           # end at the first solve; off by default, so an episode
+                              # keeps hunting for more distinct crashes
 ```
 
 Grade a hand-crafted or external (AFL++ / libFuzzer / honggfuzz) PoC without any

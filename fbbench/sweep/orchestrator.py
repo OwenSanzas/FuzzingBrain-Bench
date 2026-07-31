@@ -89,7 +89,7 @@ def bug_kb(bug: str) -> list[str]:
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              seed: int | None = None, batch: str | None = None,
-             preserve_pocs: bool = True, stop_on_solve: bool = True,
+             preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
@@ -112,7 +112,7 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
-             stop_on_solve: bool = True, api_key: str | None = None,
+             stop_on_solve: bool = False, api_key: str | None = None,
              image_prefix: str | None = None, runner: list[str] | None = None,
              batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
@@ -229,7 +229,7 @@ def _write_summary(out: Path, models: list[str], bugs: list[str], seeds: list[in
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                output: str | None = None, max_turns: int = 100, timeout: int = 1800,
                jobs: int = 1, dashboard_pref: bool | None = None,
-               preserve_pocs: bool = True, stop_on_solve: bool = True,
+               preserve_pocs: bool = True, stop_on_solve: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
                report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",

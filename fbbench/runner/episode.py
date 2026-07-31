@@ -251,7 +251,7 @@ def run_episode(
     oracle_dir: str | None = None,
     capability_set: list[str] | None = None,
     pocs_dir: str | None = None,
-    stop_on_solve: bool = True,
+    stop_on_solve: bool = False,
     mode: str = "full-scan",
     run: dict[str, str] | None = None,
 ) -> EpisodeResult:

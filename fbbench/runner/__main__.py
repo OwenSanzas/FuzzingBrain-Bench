@@ -51,11 +51,10 @@ def main() -> int:
     ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                     help="save every graded candidate blob into pocs/{solved,failed}/ "
                          "(default on; pass --no-preserve-pocs to disable)")
-    ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=True,
-                    help="end the episode when the target defect is first reproduced "
-                         "(default on; --no-stop-on-solve lets the agent keep hunting "
-                         "for more crashes until it stops (ASSESSMENT COMPLETE) or "
-                         "--max-turns)")
+    ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
+                    help="end the episode as soon as the target defect is reproduced "
+                         "(default OFF, so the agent keeps hunting for more distinct "
+                         "crashes until it stops or --max-turns)")
     # Context mode. full-scan (blind) is the one active public mode — the bug
     # description is withheld and the agent finds the crash from the harness +
     # source alone. diffscan (delta-N) is a reserved extension point, not yet
