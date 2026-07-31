@@ -27,7 +27,12 @@ type gradeParams struct {
 //
 // The order matters for the images already published: they have no harness
 // baked in, so they keep taking the remote path unchanged.
-func (s *server) toolGrade(args []byte) (any, error) {
+//
+// `turn` is which turn of the episode this submission came from. It reaches the
+// remote oracle as a header and is meaningless locally (one container is one
+// episode, so the pool is already this run's), but it stays in the signature so
+// both paths are called the same way.
+func (s *server) toolGrade(args []byte, turn int) (any, error) {
 	var p gradeParams
 	if err := json.Unmarshal(args, &p); err != nil {
 		return nil, err
@@ -49,5 +54,5 @@ func (s *server) toolGrade(args []byte) (any, error) {
 		return nil, fmt.Errorf("run_poc_on_harness needs either a harness baked into the image " +
 			"(BENCH_ORACLE_DIR) or a remote grader (BENCH_GRADE_URL); neither is present")
 	}
-	return s.gradeRemote(abs)
+	return s.gradeRemote(abs, turn)
 }

@@ -11,12 +11,18 @@ index (kept named `seed-N` for back-compat with the legacy 518-row dataset).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
+import urllib.request
+import uuid
 from pathlib import Path
 
-from fbbench.grading import DEFAULT_KB, capability_set, find_bug, list_bugs
+from fbbench.grading import pool
+from fbbench.grading import (
+    DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
+)
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
 
@@ -52,8 +58,9 @@ def cell_dir(out: Path, bug: str, model: str, sample: int) -> Path:
     """Per-cell output dir. `sample` indexes repeat runs of (bug, model).
 
     Keeps the legacy `seed-N` directory naming for back-compat with the
-    518 existing data points; the integer no longer drives sampling
-    (runner has no --seed arg) — it is purely a directory label."""
+    518 existing data points. It still does not drive sampling — it is which
+    repeat this is, forwarded to the runner as --seed so the oracle can tell
+    one cell's repeats apart in its own records."""
     return out / bug / model / f"seed-{sample}"
 
 
@@ -66,6 +73,12 @@ def _seed_solved(s: dict) -> bool:
     caps = s.get("capabilities", {})
     applicable = {k: v for k, v in caps.items() if v != "n/a"}
     return bool(applicable) and all(v == "fired" for v in applicable.values())
+
+
+def _denom(score: dict) -> int:
+    """Tier denominator for one cell: the rungs its bug is graded on, not 5."""
+    return len(graded_flags(score.get("capabilities") or {},
+                            (score.get("config") or {}).get("capability_set")))
 
 
 def bug_kb(bug: str) -> list[str]:
@@ -83,6 +96,7 @@ _SUBPROC_BACKSTOP_S = 180
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              timeout: int | None = None,
+             seed: int | None = None, batch: str | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
              runner: list[str] | None = None) -> list[str]:
@@ -92,6 +106,10 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
                                 "--max-turns", str(max_turns), "--out-dir", str(cd)]
     if timeout is not None:
         cmd += ["--timeout", str(timeout)]
+    if seed is not None:
+        cmd += ["--seed", str(seed)]
+    if batch:
+        cmd += ["--batch", batch]
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
     if not stop_on_solve:
         cmd.append("--no-stop-on-solve")
@@ -105,9 +123,11 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
              stop_on_solve: bool = False, api_key: str | None = None,
-             image_prefix: str | None = None, runner: list[str] | None = None) -> dict | None:
+             image_prefix: str | None = None, runner: list[str] | None = None,
+             batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
+                   seed=sample, batch=batch,
                    preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
                    api_key=api_key, image_prefix=image_prefix, runner=runner)
     try:
@@ -122,10 +142,18 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
 
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
+    # Unique crashes are counted by the oracle, which is the only side that knows
+    # which crashes are the same one. Absent (no batch id, oracle unreachable)
+    # the column is left blank rather than zeroed — zero would be a claim about
+    # the run, and this is a claim about the lookup.
+    uid = pool.batch_uid(out)
+    crash_score = pool.batch_score(uid) if uid else None
+    by_model = {m["model"]: m for m in (crash_score or {}).get("models", [])}
+
     print("\n" + "=" * 78)
-    print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'crash':>6s} {'diff':>7s} "
+    print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
           f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
-    print("  " + "-" * 82)
+    print("  " + "-" * 90)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
         solved = refusals = n = 0
@@ -163,10 +191,56 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 agg[k] += int(caps[k])
             if bug_solved:
                 solved += 1
-        print(f"  {model:24s} {crashes:>7d} {f'{solved}/{n}':>7s} "
+        cs = by_model.get(model)
+        uniq = f"{cs['crashes_found']}" if cs else f"{crashes}"
+        print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
               f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
               f"{refusals:>6d} {cost:>8.2f}")
-    print("=" * 82)
+    print("=" * 90)
+    if crash_score is None:
+        print("  (uniqCr unavailable: no batch id recorded, or the oracle could not be reached)")
+    else:
+        for m in crash_score.get("models", []):
+            print(f"  {m['model']}: {m['crashes_found']} distinct crashes over "
+                  f"{m['challenges']} challenge(s) — {m['preset_solved']} preset, "
+                  f"{m['off_target']} off-target ({m['unpatched_upstream']} still crash the fixed build)")
+
+
+def register_batch(name: str, params: dict) -> str:
+    """Mint an id for this sweep and tell the oracle what flags defined it.
+
+    Returns the id whether or not registration succeeded. Best-effort on purpose:
+    a sweep that cannot reach the grader should still run — it loses the ability
+    to explain its own numbers later, which is worse than not running only if you
+    squint. The cells carry the id regardless, so the grades still group.
+    """
+    batch_uid = uuid.uuid4().hex
+    url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
+    body = json.dumps({"batch_uid": batch_uid, "name": name, "params": params}).encode()
+    req = urllib.request.Request(
+        f"{url}/v1/batches", data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "ngrok-skip-browser-warning": "true"})
+    try:
+        urllib.request.urlopen(req, timeout=30).close()
+    except Exception as e:  # noqa: BLE001 — nothing here is worth failing a sweep for
+        print(f"  note: could not register this batch ({e}); results will still group "
+              f"under {batch_uid[:12]} but their flags will not be recorded")
+    return batch_uid
+
+
+def _write_summary(out: Path, models: list[str], bugs: list[str], seeds: list[int],
+                   max_turns: int, elapsed_s: float | None) -> None:
+    """Write the self-contained, answer-free summary page. Never fatal: a run
+    that finished should not be reported as failed because its page could not be
+    rendered."""
+    try:
+        from fbbench.report import write_summary
+        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=seeds,
+                            max_turns=max_turns, elapsed_s=elapsed_s)
+        print(f"  summary: {idx}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  (summary generation skipped: {e})")
 
 
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
@@ -191,12 +265,32 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     """
     if samples < 1:
         raise ValueError("samples must be >= 1 (a repeat count, not a seed index)")
-    out = resolve_output(output)
+    # One run, one self-contained folder, never a collision — named and un-named
+    # runs behave identically:
+    #   * no --output   -> an auto name output/run_<timestamp>
+    #   * --output NAME -> output/NAME, but if that already exists a real run
+    #                      forks output/NAME_<timestamp> instead of resuming into
+    #                      (or overwriting) the earlier campaign.
+    # A fresh timestamp never collides, so the summary always lives in this run's
+    # own folder and no two runs share results. --report-only is the sole reader:
+    # it must open the existing folder in place, so it never forks.
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if output is None:
+        out = resolve_output(f"run_{ts}")
+    else:
+        out = resolve_output(output)
+        if not report_only and out.exists():
+            out = out.parent / f"{out.name}_{ts}"
     print(f"  output: {out}")
     seeds = list(range(samples))  # N -> seed indices [0 .. N-1]
 
     if report_only:
         aggregate(out, models, bugs, seeds)
+        # Rebuild index.html too. --report-only used to print the leaderboard and
+        # leave the page as it was, so a page written before a scoring change kept
+        # showing the old numbers with no sign it was stale.
+        _write_summary(out, models, bugs, seeds, max_turns, elapsed_s=None)
         return 0
 
     # samples-major order: one full (model x bug) pass per sample, so repeats of
@@ -205,6 +299,25 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     done = sum(1 for m, b, s in cells if (cell_dir(out, b, m, s) / "score.json").is_file())
     print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
           f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
+
+    # One id for the whole matrix, so every grade it produces rolls up to the
+    # flags that defined it. A resumed sweep gets a NEW id: it is a different
+    # experiment in wall-clock terms even when the cells are the same.
+    batch_uid = register_batch(out.name, {
+        "models": models, "bugs": len(bugs), "samples": samples,
+        "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
+        "stop_on_solve": stop_on_solve, "output": str(out),
+    })
+    # Persist it so `--report-only` months later can still ask the oracle what
+    # this sweep found. Without it the id lives only in the cells' score.json,
+    # and a report over a partially-deleted output tree loses the batch entirely.
+    #
+    # The tree is created here rather than left to the first cell: this is now
+    # the first write into it, and every cell dir is nested under it. Without
+    # this a fresh --output aborts the whole sweep before a single episode runs.
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "batch.json").write_text(json.dumps(
+        {"batch_uid": batch_uid, "name": out.name}, indent=2) + "\n")
 
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
@@ -247,7 +360,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                            api_key=api_key, image_prefix=image_prefix, runner=runner)
+                            api_key=api_key, image_prefix=image_prefix, runner=runner,
+                            batch=batch_uid)
         except Exception as e:  # noqa: BLE001
             import traceback
             traceback.print_exc()
@@ -292,6 +406,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
                     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
+                                   seed=sample, batch=batch_uid,
                                    preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
                                    api_key=api_key, image_prefix=image_prefix, runner=runner)
@@ -323,12 +438,5 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     print(f"\n  done in {elapsed:.0f}s, spent ~${spent:.2f} total (all cells on disk)")
     aggregate(out, models, bugs, seeds)
 
-    # Self-contained, answer-free summary page.
-    try:
-        from fbbench.report import write_summary
-        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=seeds,
-                            max_turns=max_turns, elapsed_s=elapsed)
-        print(f"  summary: {idx}")
-    except Exception as e:  # noqa: BLE001
-        print(f"  (summary generation skipped: {e})")
+    _write_summary(out, models, bugs, seeds, max_turns, elapsed_s=elapsed)
     return 0

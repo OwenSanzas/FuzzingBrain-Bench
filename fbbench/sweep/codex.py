@@ -35,7 +35,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-from fbbench.grading import DEFAULT_GRADE_URL, capability_set, find_bug
+from fbbench.grading import (
+    DEFAULT_GRADE_URL, capability_set, find_bug, solved as oracle_solved,
+)
 from fbbench.models import cost_usd
 from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
@@ -104,7 +106,7 @@ persistence = "none"
 # ephemeral (--rm) container for post-hoc re-grading.
 [mcp_servers.harness]
 command = "docker"
-args = ["run", "-i", "--rm", "--security-opt", "seccomp=unconfined", "-v", "{ws}:/workspace", "{image}", "mcp-server"]
+args = ["run", "-i", "--rm", "--pull=always", "--security-opt", "seccomp=unconfined", "-v", "{ws}:/workspace", "{image}", "mcp-server"]
 tool_timeout_sec = 300
 startup_timeout_sec = 60
 """
@@ -366,7 +368,7 @@ def _remote_grade(alias: str, data: bytes) -> dict:
     """POST a candidate blob to the REMOTE oracle; return its full verdict dict
     (capabilities, capabilities_bestof, target_bug_found, ...)."""
     req = urllib.request.Request(
-        f"{GRADE_URL}/grade?bug={alias}", data=data,
+        f"{GRADE_URL}/v1/challenges/{alias}/grade", data=data,
         headers={"Content-Type": "application/octet-stream",
                  "ngrok-skip-browser-warning": "true"})
     with urllib.request.urlopen(req, timeout=300) as r:
@@ -405,7 +407,7 @@ def _best_caps(alias: str, blobs: list[str],
                 f"(blob {i}: {os.path.basename(b)}) via {GRADE_URL}: {e}"
             ) from e
         caps = resp.get("capabilities", {})
-        target = bool(resp.get("target_bug_found", False))
+        target = oracle_solved(resp)
         ts = sum(1 for f in FLAGS if caps.get(f) == "fired")
         if poc_root is not None:
             sub = poc_root / ("solved" if target else "failed")

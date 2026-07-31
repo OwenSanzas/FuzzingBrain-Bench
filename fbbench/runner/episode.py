@@ -18,7 +18,8 @@ from fbbench.prompts import (
 )
 from dataclasses import replace
 from fbbench.grading.bench_yaml import DEFAULT_KB, harness_sanitizer
-from fbbench.grading.crash_sig import crash_signature
+from fbbench.grading.grader import solved as oracle_solved
+from fbbench.grading.signature import signature as crash_signature
 from fbbench.models.catalog import context_window
 from fbbench.runner.backends.base import Backend, Completion, ToolResult
 from fbbench.runner.mcp_client import MCPClient, MCPToolError
@@ -220,6 +221,29 @@ class EpisodeResult:
     error: str | None = None
 
 
+def _crash_identity(out: dict) -> str:
+    """Which crash this graded candidate produced, as a key for the run's set.
+
+    Three sources, best first, because a run may be graded three different ways
+    and the number has to mean the same thing in all of them:
+
+      1. `crash_signature` — a self-contained image graded this locally and
+         already named the crash with the shipped rules. Use its answer; naming
+         it again here could only disagree with it.
+      2. the harness output — an image that grades remotely returns the run's
+         output but no signature, so name it with the SAME rules the image and
+         the backend use. One implementation, three callers.
+      3. a constant — the grader says a crash fired but nothing in the output
+         names it. Every such crash then shares one identity, which UNDERcounts.
+         That is the right way to be wrong: a run is never credited with a
+         distinct find we cannot actually distinguish.
+    """
+    if out.get("crash_signature"):
+        return str(out["crash_signature"])
+    sig = crash_signature(out.get("harness_output") or {})
+    return sig.canon_sig if sig else "crash|<unnamed>"
+
+
 def neutral_tools(mcp: MCPClient) -> list[dict]:
     """Tool schemas straight from the MCP server's tools/list — the single source
     of truth for the tool surface (name + description + params).
@@ -263,8 +287,9 @@ def run_episode(
     pocs_dir: str | None = None,
     stop_on_solve: bool = False,
     mode: str = "full-scan",
+    run: dict[str, str] | None = None,
 ) -> EpisodeResult:
-    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
+    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image, run=run)
     mcp.initialize()
     kb: set[str] = set(capability_set or DEFAULT_KB)
     poc_root: Path | None = Path(pocs_dir) if pocs_dir else None
@@ -452,7 +477,11 @@ def run_episode(
             solved_hit = False   # a candidate this turn that IS the target defect
             for tc in comp.tool_calls:
                 try:
-                    out = mcp.call(tc.name, tc.input or {})
+                    # Which turn this submission came from. The oracle records it
+                    # so a find can be placed in the episode without replaying the
+                    # transcript; the budget it is measured against is already on
+                    # the batch. Turns are 1-based here to match the budget note.
+                    out = mcp.call(tc.name, tc.input or {}, meta={"turn": turn + 1})
                     is_error = False
                 except MCPToolError as e:
                     out = {"error": str(e), "data": e.data}
@@ -468,7 +497,7 @@ def run_episode(
                     # capability_set incl. `differential` and any `n/a` rungs).
                     caps_now = out.get("capabilities", {})          # unanimity
                     bestof_now = out.get("capabilities_bestof") or {}  # best-of
-                    target_found = bool(out.get("target_bug_found", False))
+                    target_found = oracle_solved(out)
                     if target_found:
                         result.solved = True
 
@@ -517,14 +546,9 @@ def run_episode(
                     # target_found is otherwise read for SCORING, never surfaced.
                     if target_found:
                         solved_hit = True
-                    if (bestof_now or caps_now).get("crash") == "fired":
+                    if out.get("crashed") or (bestof_now or caps_now).get("crash") == "fired":
                         crashed_hit = True
-                        # Count DISTINCT crashes: derive a signature from this
-                        # candidate's raw harness output and add it to the set.
-                        # The oracle already confirmed a crash fired, so a
-                        # candidate whose output we cannot parse still counts once.
-                        sig = (crash_signature(out.get("harness_output") or {})
-                               or "crash|<unparsed>")
+                        sig = _crash_identity(out)
                         if sig not in result.crash_signatures:
                             result.crash_signatures.add(sig)
                             result.unique_crashes = len(result.crash_signatures)
@@ -533,7 +557,22 @@ def run_episode(
                             tlog({"event": "unique_crash", "turn": turn,
                                   "signature": sig, "unique_crashes": result.unique_crashes})
 
-                    payload = json.dumps({"harness_output": out.get("harness_output", {})})
+                    # The runner runs the image with BENCH_GRADE_REVEAL=1, so the
+                    # image's own seal is bypassed and `out` holds the full
+                    # verdict. This rebuilds the seal for the model, and is the
+                    # one that matters in a real run -- the image's version only
+                    # ever applies to an external user driving the image directly.
+                    # Keep it an allow-list, and check it against the ones in
+                    # tools/mcp-server/gradeserver.go (remote) and gradelocal.go
+                    # (in-image) whenever any of them moves: a field added there
+                    # and not here is invisible to every benchmark run. The
+                    # three are not identical on purpose --
+                    # duration_ms is forwarded there and withheld here, because
+                    # the model is not meant to tune against grading latency.
+                    sealed = {"harness_output": out.get("harness_output", {})}
+                    if out.get("crash_novelty"):
+                        sealed["crash_novelty"] = out["crash_novelty"]
+                    payload = json.dumps(sealed)
                 else:
                     payload = json.dumps(out)
 

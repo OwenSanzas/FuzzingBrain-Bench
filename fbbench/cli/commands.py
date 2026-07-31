@@ -12,6 +12,7 @@ from fbbench.cli.console import (
 from fbbench.env import detect_provider, read_dotenv
 from fbbench.grading import (
     capability_set, find_bug, grade_blob, list_bugs, read_bench,
+    solved as oracle_solved,
 )
 from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
@@ -30,17 +31,17 @@ def _require_bug(bug_id: str) -> Path:
 def cmd_list(_args) -> int:
     bugs = list_bugs()
     print(bold(f"\n  {len(bugs)} bugs available\n"))
-    print(f"  {'bug_id':<38s}  {'K_b':<28s}  title")
+    print(f"  {'bug_id':<38s}  {'K_b':<28s}  project")
     print(f"  {'-'*38}  {'-'*28}  -----")
     for bug_id, bd in bugs:
         try:
             bench = read_bench(bd / "bench.yaml")
-            title = bench.get("title", "")
+            project = bench.get("project", "")
             K_b = bench.get("capability_set", [])
         except Exception:
-            title, K_b = "", []
+            project, K_b = "", []
         flags = ",".join(K_b) if K_b else "?"
-        print(f"  {bug_id:<38s}  {cyan(flags):<{28 + len(cyan(flags)) - len(flags)}}  {dim(title)}")
+        print(f"  {bug_id:<38s}  {cyan(flags):<{28 + len(cyan(flags)) - len(flags)}}  {dim(project)}")
     print()
     return 0
 
@@ -50,7 +51,7 @@ def cmd_show(args) -> int:
     bench = read_bench(bd / "bench.yaml")
 
     print()
-    print(bold(f"  {bench.get('title', args.bug_id)}"))
+    print(bold(f"  {args.bug_id}"))
     print(dim(f"  {bench.get('upstream_report', '')}"))
     print()
     print(f"  {'bug_id':<18s} {bench.get('bug_id')}")
@@ -136,10 +137,10 @@ def cmd_grade(args) -> int:
                 print(f"    {dim(flag + ':'):<10s} {ev[flag]}")
 
     agreed = r.get("agreed", False)
-    # Authoritative: the oracle's target_bug_found (a single input reproduced the
-    # full defect). Fall back to caps-all-fired only if the field is absent.
-    if "target_bug_found" in r:
-        kb_ok = bool(r["target_bug_found"])
+    # Authoritative: the oracle's own solve flag (a single input reproduced the
+    # full defect). Fall back to caps-all-fired only if neither name is present.
+    if "solved" in r or "target_bug_found" in r:
+        kb_ok = oracle_solved(r)
     else:
         kb_ok = all(caps.get(c) == "fired" for c in K_b) and agreed
     summary_color = green if kb_ok else red

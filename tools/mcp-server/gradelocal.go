@@ -31,6 +31,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Where build_challenge stages the oracle inside the image. Root-owned and
@@ -46,6 +48,53 @@ func (s *server) localHarness() string {
 		return p
 	}
 	return ""
+}
+
+// oracleConfig is the per-challenge grading configuration, read from the
+// root-owned oracle directory rather than from bench.yaml.
+//
+// It lives there because bench.yaml is the agent's to read. Neither field names
+// the defect, but both describe it: a 3-second timeout on a challenge whose
+// harness normally gets 30 says "this one is about taking too long", and
+// detect_leaks says "this one is a leak". That is a narrower hint than an answer
+// key, and the oracle dir is 0700 root so exec() cannot read it — but anyone who
+// pulls the image can, so keep it to what grading genuinely needs.
+type oracleConfig struct {
+	// TimeoutS bounds one harness run. Per-challenge because it is what the
+	// remote oracle has always used; a finite-but-slow algorithmic DoS is only
+	// distinguishable from a hang by the gate it was tuned against.
+	TimeoutS int `yaml:"timeout_s"`
+	// DetectLeaks turns LeakSanitizer on for the challenges whose defect IS a
+	// leak. Left off everywhere else: LSan ships inside ASan and reports at
+	// exit, so leaving it on globally flags error-path leaks in the harness and
+	// the library, and each one would count as a distinct crash.
+	DetectLeaks bool `yaml:"detect_leaks"`
+}
+
+// defaultHarnessTimeoutS matches what the corpus uses for a challenge that
+// specifies nothing, and what runHarness falls back to.
+const defaultHarnessTimeoutS = 30
+
+func (s *server) oracleConfig() oracleConfig {
+	cfg := oracleConfig{TimeoutS: defaultHarnessTimeoutS}
+	data, err := os.ReadFile(filepath.Join(s.oracleDir, "oracle.yaml"))
+	if err != nil {
+		// No file is normal: a challenge with nothing to override does not need
+		// one, and the defaults are the common case.
+		return cfg
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		log.Printf("warn: oracle.yaml unreadable (%v); using defaults", err)
+		return oracleConfig{TimeoutS: defaultHarnessTimeoutS}
+	}
+	if cfg.TimeoutS <= 0 {
+		cfg.TimeoutS = defaultHarnessTimeoutS
+	}
+	// An operator override still wins, for spot-checking a suspected leak.
+	if os.Getenv("BENCH_DETECT_LEAKS") == "1" {
+		cfg.DetectLeaks = true
+	}
+	return cfg
 }
 
 // gradeLocal runs the candidate through the baked harness and reports what
@@ -84,8 +133,9 @@ func (s *server) gradeLocal(abs string) (any, error) {
 	}
 
 	pinGradingEnv()
+	cfg := s.oracleConfig()
 	start := time.Now()
-	run := runHarness(bin, bench.Harness.Invocation, poc, runDir, bench.Harness.TimeoutS, detectLeaks())
+	run := runHarness(bin, bench.Harness.Invocation, poc, runDir, cfg.TimeoutS, cfg.DetectLeaks)
 	crashed := crashFired(run)
 
 	// The signature is derived from the RAW output: it names functions, files
@@ -156,17 +206,6 @@ func (s *server) observe(canonSig string) string {
 	return "new"
 }
 
-// detectLeaks reports whether LeakSanitizer should run at exit.
-//
-// Off by default, and that is a real trade-off. LSan ships inside ASan and
-// reports at exit, so leaving it on flags every error-path leak in the harness
-// or the library — noise that would count as a distinct "crash" on all 68
-// challenges. Off means the corpus's few genuine leak defects produce no fault
-// locally. Operators who want them can flip this per image; the alternative,
-// reading the expected class, is exactly the answer key this image does not
-// carry.
-func detectLeaks() bool { return os.Getenv("BENCH_DETECT_LEAKS") == "1" }
-
 // sanitizeDisplay rewrites paths that would tell the agent it is being graded,
 // WITHOUT touching what actually ran. The harness keeps its real path on disk
 // so allocator layout — and therefore the bug — reproduces exactly; only the
@@ -203,8 +242,8 @@ type sigResult struct {
 const defaultSigScript = "/opt/fbbench/signature.py"
 
 // sigScript resolves the rules file. BENCH_SIG_SCRIPT is for running the server
-// outside an image (tests, the host CLI); it is server environment, which the
-// agent has no way to reach — exec() gets a scrubbed env and never sees this.
+// outside an image (tests, the host CLI); it is on exec()'s env deny-list so the
+// agent's shell never sees it.
 func sigScript() string {
 	if p := os.Getenv("BENCH_SIG_SCRIPT"); p != "" {
 		return p

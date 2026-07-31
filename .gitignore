@@ -8,6 +8,10 @@ runs/
 .srccache/
 .env
 
+# local build of tools/mcp-server — this repo ships the Go source only; the
+# server that actually runs is the one baked into each challenge image
+bin/
+
 # internal working docs — never publish (audits, host/image notes, strategy, …)
 _internal/
 

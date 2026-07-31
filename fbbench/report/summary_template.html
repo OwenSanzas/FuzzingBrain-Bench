@@ -149,6 +149,15 @@ const solved = cells.filter(c => c.solved).length;
 // cracking rare hard bugs is worth more. maxScore = sum of D over all 68 bugs.
 const score = cells.filter(c => c.solved).reduce((a,c) => a + (c.d||0), 0);
 const maxScore = D.max_score || 0;
+// Unique-crash score: one point per DISTINCT crash the oracle attributed to this
+// run, capped per challenge so a single crash-rich harness cannot dominate. Kept
+// next to the difficulty score rather than replacing it — every earlier result
+// is expressed in that one, and dropping it would make them incomparable.
+const CS = D.crash_score;
+const crashPts   = CS ? CS.models.reduce((a,m) => a + (m.score||0), 0) : null;
+const crashFound = CS ? CS.models.reduce((a,m) => a + (m.crashes_found||0), 0) : null;
+const crashOff   = CS ? CS.models.reduce((a,m) => a + (m.off_target||0), 0) : null;
+const crashUnpat = CS ? CS.models.reduce((a,m) => a + (m.unpatched_upstream||0), 0) : null;
 const errs = cells.filter(c => c.reason === "error").length;
 const elapsed = D.elapsed_s ? fmtDur(D.elapsed_s) : "—";
 function fmtDur(s){s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);
@@ -157,6 +166,9 @@ function stat(n,l,cls=""){return `<div class="stat"><div class="n ${cls}">${n}</
 document.getElementById("stats").innerHTML =
   stat(`${done}`,"cells graded") + stat(`${solved}`,"solved","g") +
   (maxScore ? stat(`${score}<span class="den"> / ${maxScore}</span>`,"difficulty score","p") : "") +
+  (CS ? stat(`${crashPts}`,"unique-crash score","g") : "") +
+  (CS ? stat(`${crashFound}<span class="den"> / ${crashOff} off-target</span>`,"distinct crashes") : "") +
+  (CS && crashUnpat ? stat(`${crashUnpat}`,"still crash the fix","p") : "") +
   (errs ? stat(`${errs}`,"errors") : "") +
   stat(`$${(D.total_cost||0).toFixed(2)}`,"total cost") +
   stat(elapsed,"elapsed","a");
@@ -191,7 +203,8 @@ const tally = {};
 for (const m of models){
   const cs = cells.filter(c => c.model === m);
   tally[m] = { solved: cs.filter(c=>c.solved).length, cost: cs.reduce((a,c)=>a+(c.cost||0),0),
-               score: cs.filter(c=>c.solved).reduce((a,c)=>a+(c.d||0),0) };
+               score: cs.filter(c=>c.solved).reduce((a,c)=>a+(c.d||0),0),
+               crashes: cs.reduce((a,c)=>a+(c.uniq_crashes||0),0) };
 }
 
 const LADDER_LABEL = {reach:"reach", crash:"crash", differential:"diff", "class":"class", site:"site"};

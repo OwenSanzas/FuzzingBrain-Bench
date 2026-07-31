@@ -1,18 +1,10 @@
 bug_id: graaljs-01
 project: graaljs
-target:
-  language: jvm
-  build_system: maven
+is_oss_fuzz: false
+language: jvm
 harness:
-  type: java
-  entrypoint: IntlFuzzer.fuzzerTestOneInput
-  invocation:
-  - '@@'
-  rss_limit_mb: 1024
-  timeout_s: 30
-  provenance: fuzzingbrain
   sanitizer: jazzer
-reproducibility:
-  base_image_digest: ''
-  snapshot_debian_date: 20260101T000000Z
-  source_date_epoch: 1735689600
+  engine: jazzer
+  invocation: ["@@"]
+
+capability_set: [reach, crash, differential, class, site]

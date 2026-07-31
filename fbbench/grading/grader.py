@@ -34,7 +34,7 @@ def grade_blob(bug_dir: Path, blob: Path, rounds: int = 1,
     grade_url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
     data = Path(blob).read_bytes()
     req = urllib.request.Request(
-        f"{grade_url}/grade?bug={bug_id}", data=data, method="POST",
+        f"{grade_url}/v1/challenges/{bug_id}/grade", data=data, method="POST",
         headers={"Content-Type": "application/octet-stream",
                  # Skip ngrok's browser interstitial so the JSON comes back clean.
                  "ngrok-skip-browser-warning": "true"})
@@ -48,3 +48,43 @@ def grade_blob(bug_dir: Path, blob: Path, rounds: int = 1,
     except urllib.error.URLError as e:
         raise RuntimeError(f"grade oracle unreachable ({grade_url}): {e.reason}") from None
     return out, time.time() - t0
+
+
+def solved(verdict: dict) -> bool:
+    """Did one candidate reproduce the documented bug — the authoritative solve.
+
+    The oracle's HTTP response calls this `solved`. grade-core, one layer below,
+    calls the same boolean `target_bug_found`, and that is the name the backend
+    reads before republishing it. Accept either so a verdict scores the same
+    whether it came from the service or straight out of the judge.
+    """
+    if "solved" in verdict:
+        return bool(verdict["solved"])
+    return bool(verdict.get("target_bug_found", False))
+
+
+def graded_flags(caps: dict, declared: list[str] | None = None) -> list[str]:
+    """The rungs this challenge is actually graded on, in ladder order.
+
+    Three of the corpus's challenges are graded on fewer than five rungs — a
+    resource-exhaustion DoS has no machine-checkable crash site, so `reach` and
+    `site` are not part of its capability_set. Scoring those out of five makes a
+    complete solve read as partial (systemd-02 solves everything it has and shows
+    2/5), which is why no denominator should be the constant 5.
+
+    An "n/a" anywhere in caps means the oracle spoke, and it is authoritative:
+    those are exactly the rungs it declined to grade for this bug.
+
+    Without one we cannot tell a real five-rung verdict from a cell that never
+    graded anything — an untouched capability map is five `not_fired`, not an
+    empty dict — so the declared capability_set answers instead. It is only ever
+    trusted here, never over the oracle, and any rung that actually fired is
+    unioned in: a stale declaration must not produce a denominator smaller than
+    the score above it.
+    """
+    if any(v == "n/a" for v in caps.values()):
+        return [f for f in FLAGS if caps.get(f) not in (None, "n/a")]
+    if declared:
+        fired = {f for f in FLAGS if caps.get(f) == "fired"}
+        return [f for f in FLAGS if f in declared or f in fired]
+    return list(FLAGS)

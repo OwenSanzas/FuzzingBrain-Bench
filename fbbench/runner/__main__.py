@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
 from pathlib import Path
 
 from fbbench.env import load_dotenv
@@ -55,15 +56,19 @@ def main() -> int:
                     help="save every graded candidate blob into pocs/{solved,failed}/ "
                          "(default on; pass --no-preserve-pocs to disable)")
     ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
-                    help="end the episode when the target defect is first reproduced "
-                         "(default OFF for unique-crash scoring — the agent keeps "
-                         "hunting for more distinct crashes until it stops "
-                         "(ASSESSMENT COMPLETE) or --max-turns; pass --stop-on-solve "
-                         "to end at the first target solve)")
+                    help="end the episode as soon as the target defect is reproduced "
+                         "(default OFF, so the agent keeps hunting for more distinct "
+                         "crashes until it stops or --max-turns)")
     # Context mode. full-scan (blind) is the one active public mode — the bug
     # description is withheld and the agent finds the crash from the harness +
     # source alone. diffscan (delta-N) is a reserved extension point, not yet
     # implemented (see prompts.build_diffscan_message).
+    ap.add_argument("--batch", default=None,
+                    help="uid of the sweep this cell belongs to; the orchestrator "
+                         "registers the sweep's flags under it once")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="which sample of this (bug, model) cell this run is; recorded "
+                         "with the run id so repeats can be told apart")
     ap.add_argument("--mode", default="full-scan", choices=("full-scan", "diffscan"),
                     help="agent context mode (default: full-scan / blind)")
     ap.add_argument("--repo-root", default=None,
@@ -102,6 +107,17 @@ def main() -> int:
 
     backend = make_backend(args.model, api_key=args.api_key)
     pocs_dir = (out_dir / "pocs") if args.preserve_pocs else None
+    # One id per episode, so the oracle can group this run's submissions. Minted
+    # here rather than per grade: the point is that twenty inputs from one run
+    # are one attempt at the challenge, not twenty. Nothing depends on it being
+    # unforgeable — it decides no verdict, only how results are grouped.
+    run_identity = {
+        "uid": uuid.uuid4().hex,
+        "batch": args.batch or "",
+        "model": args.model,
+        "arm": "api",
+        "seed": str(args.seed) if args.seed is not None else "",
+    }
     # Everything (challenge surface, workspace, remote grading) lives in the
     # image; the host stages nothing. bug_dir="/src" is the in-container view.
     ep_bug_dir = "/src"
@@ -119,11 +135,18 @@ def main() -> int:
         pocs_dir=str(pocs_dir) if pocs_dir else None,
         stop_on_solve=args.stop_on_solve,
         mode=args.mode,
+        run=run_identity,
     )
 
     score = {
         "bug_id": result.bug_id,
         "model": result.model,
+        # Identity, not score. The oracle knows which distinct crashes this run
+        # found; the runner deliberately does not, because a runner that knows
+        # can leak it back into the episode. Recording the id lets the report --
+        # which runs afterwards, outside any episode -- ask the oracle.
+        "run_uid": run_identity["uid"],
+        "batch_uid": run_identity["batch"] or None,
         # Every run knob that shaped this episode — surfaced verbatim in the
         # report so a result is fully reproducible from its own score.json.
         "config": {

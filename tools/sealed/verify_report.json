@@ -1,0 +1,10 @@
+{
+  "wire_ok": [],
+  "wire_fail": [],
+  "leak": [],
+  "no_image": [],
+  "no_poc": [
+    "avro-03"
+  ],
+  "private_endpoint": []
+}

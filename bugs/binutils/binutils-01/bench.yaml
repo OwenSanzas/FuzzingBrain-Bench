@@ -1,19 +1,10 @@
 bug_id: binutils-01
 project: binutils
-target:
-  language: c
-  build_system: handrolled
+is_oss_fuzz: true
+language: c
 harness:
-  type: libfuzzer
-  entrypoint: LLVMFuzzerTestOneInput
-  invocation:
-  - -rss_limit_mb=256
-  - '@@'
-  rss_limit_mb: 256
-  timeout_s: 30
-  provenance: fuzzingbrain
   sanitizer: libfuzzer
-reproducibility:
-  base_image_digest: ''
-  snapshot_debian_date: 20260101T000000Z
-  source_date_epoch: 1735689600
+  engine: libfuzzer
+  invocation: ["-rss_limit_mb=256", "@@"]
+
+capability_set: [reach, crash, differential, class, site]

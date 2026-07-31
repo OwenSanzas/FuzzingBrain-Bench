@@ -21,6 +21,14 @@ var execEnvDeny = map[string]bool{
 	"BENCH_ORACLE_DIR": true,
 	"BENCH_AGENT_UID":  true,
 	"BENCH_AGENT_GID":  true,
+	// Local grading. None of these name the defect, but together they describe
+	// the grader well enough to be worth probing: where its rules live, whether
+	// it is running in reveal mode, and how it is configured. An agent that can
+	// read them learns it is being scored and how — which is exactly what the
+	// sealed verdict exists to withhold.
+	"BENCH_SIG_SCRIPT":   true,
+	"BENCH_GRADE_REVEAL": true,
+	"BENCH_DETECT_LEAKS": true,
 }
 
 // agentEnv returns the process environment with the oracle/privsep vars

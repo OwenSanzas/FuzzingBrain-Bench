@@ -8,36 +8,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// benchYAML mirrors bench.yaml exactly: five public fields, answer-free by
+// construction.
+//
+// Everything the older shape carried — the upstream repo and vulnerable commit,
+// the fix commit/patch, a descriptive title, notes, build reproducibility pins —
+// now lives only in the private vuln.yaml. None of that is missing by accident:
+// an image that shipped the upstream pin or the title would name the very bug it
+// is meant to hide.
 type benchYAML struct {
-	BugID          string `yaml:"bug_id"`
-	Project        string `yaml:"project"`
-	Title          string `yaml:"title"`
-	UpstreamReport string `yaml:"upstream_report"`
-	Target         struct {
-		Repo        string `yaml:"repo"`
-		VulnCommit  string `yaml:"vuln_commit"`
-		Language    string `yaml:"language"`
-		BuildSystem string `yaml:"build_system"`
-	} `yaml:"target"`
-	Harness struct {
-		Type       string   `yaml:"type"`
-		Entrypoint string   `yaml:"entrypoint"`
-		Invocation []string `yaml:"invocation"`
-		Sanitizer  string   `yaml:"sanitizer"`
-		RSSLimitMB int      `yaml:"rss_limit_mb"`
-		TimeoutS   int      `yaml:"timeout_s"`
-		Provenance string   `yaml:"provenance"`
+	BugID     string `yaml:"bug_id"`  // the neutral <project>-NN alias
+	Project   string `yaml:"project"` // the oss-fuzz project name
+	IsOSSFuzz bool   `yaml:"is_oss_fuzz"`
+	Language  string `yaml:"language"` // c | cpp | jvm
+	Harness   struct {
+		Engine     string   `yaml:"engine"`     // libfuzzer | jazzer | afl
+		Sanitizer  string   `yaml:"sanitizer"`  // asan | ubsan | lsan | jazzer | libfuzzer | none
+		Invocation []string `yaml:"invocation"` // "@@" is the input placeholder
 	} `yaml:"harness"`
-	CapabilitySet []string `yaml:"capability_set"`
-	Reproducibility struct {
-		BaseImageDigest    string `yaml:"base_image_digest"`
-		SnapshotDebianDate string `yaml:"snapshot_debian_date"`
-		SourceDateEpoch    int64  `yaml:"source_date_epoch"`
-	} `yaml:"reproducibility"`
-	Status    string `yaml:"status"`
-	CVE       string `yaml:"cve"`
-	Disclosed string `yaml:"disclosed"`
-	Notes     string `yaml:"notes"`
+}
+
+// entrypoint is the symbol the engine hands the input bytes to. It follows from
+// the engine, not from the bug, so it is derived here instead of being spelled
+// out per challenge the way bench.yaml used to.
+func (b *benchYAML) entrypoint() string {
+	switch b.Harness.Engine {
+	case "jazzer":
+		return "fuzzerTestOneInput"
+	case "libfuzzer", "afl":
+		return "LLVMFuzzerTestOneInput"
+	default:
+		return ""
+	}
 }
 
 func (s *server) loadBench() (*benchYAML, error) {
@@ -65,15 +67,14 @@ func (s *server) toolSetup(_ []byte) (any, error) {
 	// PUBLIC bench.yaml harness.sanitizer — never from the answer-side expected.yaml.
 	return map[string]any{
 		"project":  bench.Project,
-		"language": bench.Target.Language,
+		"language": bench.Language,
 		"harness": map[string]any{
-			"type":       bench.Harness.Type,
-			"entrypoint": bench.Harness.Entrypoint,
+			"engine":     bench.Harness.Engine,
+			"entrypoint": bench.entrypoint(),
 			"invocation": bench.Harness.Invocation,
 			"sanitizer":  bench.Harness.Sanitizer,
 		},
 		"workspace_path": s.workspace,
 		"bug_dir":        s.bugDir,
-		"notes":          bench.Notes,
 	}, nil
 }

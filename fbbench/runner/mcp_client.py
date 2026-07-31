@@ -39,8 +39,27 @@ def _full_scan_alias(real_bug_dir: str) -> str:
     return f"{project}-{idx:02d}"
 
 
+def run_env_args(run: dict[str, str] | None) -> list[str]:
+    """`docker run` -e flags carrying this episode's identity into the container.
+
+    The in-image mcp-server reads these and forwards them to the oracle as
+    FB-Run-* headers, which is how one run's twenty submissions are told apart
+    from twenty runs' one each. Passed as container environment, never through
+    the tool surface: the agent has no way to read or forge them, and no part of
+    the challenge changes because they are set.
+
+    Shared so the api arm and the vendor arms cannot drift on the variable names.
+    """
+    args: list[str] = []
+    for key, value in (run or {}).items():
+        if value:
+            args += ["-e", f"BENCH_RUN_{key.upper()}={value}"]
+    return args
+
+
 class MCPClient:
-    def __init__(self, bug_dir: str, workspace: str, *, image: str):
+    def __init__(self, bug_dir: str, workspace: str, *, image: str,
+                 run: dict[str, str] | None = None):
         # Drive the PUBLIC challenge image's own mcp-server over stdio. The
         # challenge surface + BENCH_* (incl. the remote BENCH_GRADE_URL) are baked
         # into the image, so what we measure is byte-identical to what any external
@@ -60,14 +79,21 @@ class MCPClient:
         self._cid_dir = tempfile.mkdtemp(prefix="fbcid-")
         self._cidfile = os.path.join(self._cid_dir, "cid")
         cmd = ["docker", "run", "-i", "--rm",
+               # Always fetch the latest published image. Without this, a stale
+               # locally-cached <image>:latest is reused silently — and an old
+               # image bakes an old mcp-server that still POSTs the retired
+               # /grade?bug= endpoint (now 404). --pull=always keeps the baked
+               # grade client in sync with the backend.
+               "--pull=always",
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
                "-e", "BENCH_GRADE_REVEAL=1"]
-        # Point the in-container grader at a local grade server when the host sets
-        # BENCH_GRADE_URL. A localhost/127.0.0.1 URL means "the host", which the
-        # container reaches via the host-gateway alias, so rewrite it and publish
-        # the alias; other hosts pass through untouched. Without this the baked-in
-        # remote BENCH_GRADE_URL (the ngrok oracle) is used.
+        # Point the in-container grader at a different grade server when the host
+        # sets BENCH_GRADE_URL. A localhost/127.0.0.1 URL means "the host", which
+        # the container reaches via the host-gateway alias, so rewrite it and
+        # publish the alias; other hosts pass through untouched. Without this the
+        # image decides for itself — a self-contained image grades locally, an
+        # older one uses the remote URL baked into it.
         grade_url = os.environ.get("BENCH_GRADE_URL")
         if grade_url:
             for local in ("127.0.0.1", "localhost"):
@@ -76,6 +102,7 @@ class MCPClient:
                     cmd += ["--add-host", "host.docker.internal:host-gateway"]
                     break
             cmd += ["-e", f"BENCH_GRADE_URL={grade_url}"]
+        cmd += run_env_args(run)
         cmd += [image, "mcp-server"]
         bug_dir, workspace = "/src", "/workspace"
         self._proc = subprocess.Popen(
@@ -105,9 +132,20 @@ class MCPClient:
     def list_tools(self) -> list[dict]:
         return self._call("tools/list", {})["tools"]
 
-    def call(self, name: str, arguments: dict) -> Any:
+    def call(self, name: str, arguments: dict, meta: dict | None = None) -> Any:
+        """Invoke a tool. `meta` rides alongside the call rather than inside it.
+
+        `arguments` is what the model produced and is bound by the tool's schema.
+        `_meta` is added here, after the model is done, so the agent can neither
+        read it nor set it — which is the whole point: it carries facts about the
+        episode (which turn this is) that the oracle wants and the agent must not
+        be able to forge.
+        """
         arguments = self._clamp_exec_timeout(name, arguments)
-        resp = self._call("tools/call", {"name": name, "arguments": arguments})
+        params: dict = {"name": name, "arguments": arguments}
+        if meta:
+            params["_meta"] = meta
+        resp = self._call("tools/call", params)
         return resp.get("structuredContent", resp)
 
     def copy_out(self, path: str, dest) -> bool:

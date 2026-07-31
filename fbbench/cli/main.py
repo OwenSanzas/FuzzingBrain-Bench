@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "when the API key is present, else fall back to sub")
     sp_run.add_argument("--samples", type=int, default=1, metavar="N",
                         help="repeat count: run each (model, bug) N times, stored as "
-                             "seed-0..seed-(N-1) (default 1). Same --output resumes it")
+                             "seed-0..seed-(N-1) (default 1)")
     sp_run.add_argument("--max-turns", type=int, default=100,
                         help="turn budget per episode (default 100)")
     sp_run.add_argument("--timeout", type=int, default=1800,
@@ -60,19 +60,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="run N cells concurrently (default 1). 4-6 is usually the "
                              "sweet spot before model rate limits kick in")
     sp_run.add_argument("--output", "-o", default=None,
-                        help="where results land (default: ./output). A bare name nests "
-                             "under it (paper-v1 -> output/paper-v1); a path is used as-is. "
-                             "Cells: output/<bug>/<model>/seed-N/")
+                        help="where results land. Default: an auto-named folder "
+                             "output/run_<timestamp>. A bare name nests under output/ "
+                             "(paper-v1 -> output/paper-v1); a path is used as-is. If the "
+                             "target already exists a fresh run forks <name>_<timestamp> "
+                             "so runs never share a folder. Cells: <output>/<bug>/<model>/seed-N/")
     sp_run.add_argument("--report-only", action="store_true",
                         help="skip running; just re-aggregate the leaderboard from <output>/")
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{solved,failed}/ "
                              "(default on; --no-preserve-pocs to disable)")
     sp_run.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
-                        help="end at the first target solve (default OFF for "
-                             "unique-crash scoring — the agent keeps hunting for "
-                             "distinct crashes until it stops or --max-turns; pass "
-                             "--stop-on-solve to end at the first target solve)")
+                        help="end at the first target solve (default OFF, so the agent "
+                             "keeps hunting for more distinct crashes until it stops "
+                             "or --max-turns)")
     dash = sp_run.add_mutually_exclusive_group()
     dash.add_argument("--dashboard", dest="dashboard", action="store_true", default=None,
                       help="force the live full-screen dashboard (default: on for a TTY, "

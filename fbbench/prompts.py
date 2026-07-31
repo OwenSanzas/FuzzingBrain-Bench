@@ -362,16 +362,30 @@ _BUDGET_NOTE_FMT = _reg("budget_note",
           "remaining wall-clock, present only when a time budget is set)")
 
 _BUDGET_LOW_SUFFIX = _reg("budget_low_suffix", """
- You are low on time — quickly run your most promising remaining crash ideas with \
-run_poc_on_harness() now, rather than starting deeper exploration you cannot finish \
-before the budget runs out.""",
-    when="Appended to the budget note once >=75% of the turn OR wall-clock budget "
-         "is spent.",
-    why="A wrap-up nudge for the LAST turns/seconds. Under breadth (unique-crash) "
-        "scoring it must NOT tell the model to converge on one 'best' candidate or "
-        "to stop hunting — that contradicts the keep-hunting nudge. Instead it says: "
-        "keep going, but spend the remaining budget RUNNING promising candidates "
-        "rather than starting deep exploration you can't finish.")
+ You are running low on turns; submit any candidate you have not run through \
+run_poc_on_harness() yet, and spend what is left reaching a fault you have not already \
+produced rather than refining one you have.""",
+    when="Appended to the budget note when the run crosses one of the marks in "
+         "BUDGET_LOW_MARKS, and only on that turn.",
+    why="Both halves are worth points and neither is obvious under time pressure. "
+        "A candidate that is never submitted scores nothing, and agents routinely "
+        "write more than they submit. A variant of a crash already found produces "
+        "the same signature and adds nothing, so polishing one in the last turns "
+        "is wasted where a different fault is not. The earlier wording told the "
+        "agent to stop exploring, which was right when a run was scored on the one "
+        "planted bug and is backwards now that it is scored on distinct crashes.")
+
+
+# Fractions of the turn budget at which the low-budget nudge fires, on the turn
+# that crosses each one. Fractions rather than a fixed interval so the behaviour
+# is the same shape at any budget: always four reminders, always at the same
+# relative moments, whether the run has 25 turns or 200. A fixed "every N turns"
+# gets sparser as budgets grow and denser as they shrink, which is backwards on
+# both ends.
+#
+# The gaps close as the budget drains (25% of it, then 10, 8, 5) because that is
+# how the urgency actually behaves.
+BUDGET_LOW_MARKS = (0.75, 0.85, 0.93, 0.98)
 
 
 def _fmt_dur(seconds: float) -> str:
@@ -384,21 +398,48 @@ def budget_note(done: int, max_turns: int, remaining: int, *,
                 elapsed_s: float | None = None,
                 remaining_s: float | None = None,
                 time_budget_s: float | None = None) -> str:
-    """The budget line: turn count plus, when a wall-clock budget is set, elapsed /
-    remaining time. The low-budget suffix is added from 75% of the turn OR time
-    budget spent."""
+    """The per-turn budget line, plus the low-budget nudge on crossing turns only.
+
+    The line itself goes out every turn: it is forty characters, and a model that
+    has to count its own turns to know where it stands will get it wrong. The
+    nudge does not. Repeating one instruction on every turn of the last quarter
+    is not a reminder, it is the loudest thing in the context -- in one 68-run
+    sweep it went out 1100 times and accounted for half of all the budget text
+    the agents read.
+
+    When a wall-clock budget is set, the line also carries elapsed / remaining
+    time. That part is INFORMATIONAL and goes out every turn; the nudge stays
+    driven by the turn marks alone. Firing it on a time threshold too would
+    reintroduce exactly the repetition the marks exist to stop, because there is
+    no previous elapsed time here to compare against and so no way to tell a
+    crossing from every turn after it. A run that is wall-clock-bound rather than
+    turn-bound still sees the time it has left on every single turn.
+    """
     time_clause = ""
-    time_low = False
     if elapsed_s is not None and time_budget_s:
         rem_s = remaining_s if remaining_s is not None else max(0.0, time_budget_s - elapsed_s)
         time_clause = (f" Time ~{_fmt_dur(elapsed_s)} elapsed, "
                        f"~{_fmt_dur(rem_s)} left of {_fmt_dur(time_budget_s)}.")
-        time_low = rem_s <= 0.25 * time_budget_s
     note = _BUDGET_NOTE_FMT.format(done=done, max_turns=max_turns,
                                    remaining=remaining, time_clause=time_clause)
-    if (remaining > 0 and done >= 0.75 * max_turns) or time_low:
+    if remaining > 0 and _crosses_low_mark(done, max_turns):
         note += _BUDGET_LOW_SUFFIX
     return note
+
+
+def _crosses_low_mark(done: int, max_turns: int) -> bool:
+    """Whether this exact turn is the first at or past one of the marks.
+
+    Comparing against the previous turn is what makes it fire once per mark
+    rather than on every turn after the first one.
+    """
+    if max_turns <= 0:
+        return False
+    for frac in BUDGET_LOW_MARKS:
+        mark = frac * max_turns
+        if done >= mark > done - 1:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------

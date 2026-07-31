@@ -1,18 +1,10 @@
 bug_id: simdutf-01
 project: simdutf
-target:
-  language: cpp
-  build_system: cmake
+is_oss_fuzz: true
+language: cpp
 harness:
-  type: libfuzzer
-  entrypoint: LLVMFuzzerTestOneInput
-  invocation:
-  - '@@'
-  rss_limit_mb: 2048
-  timeout_s: 30
-  provenance: fuzzingbrain
   sanitizer: asan
-reproducibility:
-  base_image_digest: ''
-  snapshot_debian_date: 20260101T000000Z
-  source_date_epoch: 1735689600
+  engine: libfuzzer
+  invocation: ["@@"]
+
+capability_set: [reach, crash, differential, class, site]
