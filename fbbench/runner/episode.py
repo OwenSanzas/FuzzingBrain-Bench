@@ -512,7 +512,18 @@ def run_episode(
                     if (bestof_now or caps_now).get("crash") == "fired":
                         crashed_hit = True
 
-                    payload = json.dumps({"harness_output": out.get("harness_output", {})})
+                    # The runner runs the image with BENCH_GRADE_REVEAL=1, so the
+                    # image's own seal is bypassed and `out` holds the full
+                    # verdict. This rebuilds the seal for the model, and is the
+                    # one that matters in a real run -- the image's version only
+                    # ever applies to an external user driving the image directly.
+                    # Keep it an allow-list, and keep it matching the field list
+                    # in tools/mcp-server/gradeserver.go: a field added there and
+                    # not here is invisible to every benchmark run.
+                    sealed = {"harness_output": out.get("harness_output", {})}
+                    if out.get("crash_novelty"):
+                        sealed["crash_novelty"] = out["crash_novelty"]
+                    payload = json.dumps(sealed)
                 else:
                     payload = json.dumps(out)
 
