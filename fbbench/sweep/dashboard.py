@@ -76,6 +76,10 @@ class Cell:
     caps: dict[str, str] = field(default_factory=dict)  # flag -> fired/not_fired/n-a
     solved_val: bool | None = None  # authoritative solve (score.solved); None = unknown
     tier: int = 0
+    crashes: int = 0                # distinct crashes this cell produced
+    # Whether an ORACLE ladder verdict exists for this cell. None until it
+    # finishes; False for in-image grading, which never computes one.
+    has_ladder: bool | None = None
     cost: float = 0.0
     reason: str = ""                # terminated_reason
     error: str = ""
@@ -124,7 +128,8 @@ class SweepStatus:
     # ---- configuration --------------------------------------------------
     def configure(self, *, exp: str, models: list[str], bugs: list[str],
                   samples: list[int], max_turns: int,
-                  total: int, already_done: int) -> None:
+                  total: int, already_done: int,
+                  expect_ladder: bool = True) -> None:
         with self._lock:
             self.exp = exp
             self.models = models
@@ -133,7 +138,24 @@ class SweepStatus:
             self.max_turns = max_turns
             self.total = total
             self.already_done = already_done
+            # What to draw before the first cell reports. Derived from the image
+            # tag, then corrected by the cells themselves — the data wins as soon
+            # as there is any.
+            self.expect_ladder = expect_ladder
             self.t0 = time.time()
+
+    @property
+    def show_ladder(self) -> bool:
+        """Whether this sweep has an oracle ladder to show.
+
+        Answered by the cells once any has finished — a locally-graded run
+        records no capabilities, and five dim rungs plus "0/5" would read as a
+        sweep that failed everything rather than one that measured distinct
+        crashes. Until then it falls back to what the image tag implied, so the
+        table does not change shape halfway through for the common case.
+        """
+        seen = [c.has_ladder for c in self._cells.values() if c.has_ladder is not None]
+        return any(seen) if seen else getattr(self, "expect_ladder", True)
 
     # ---- mutators -------------------------------------------------------
     def _cell(self, model: str, bug: str, sample: int) -> Cell:
@@ -177,9 +199,11 @@ class SweepStatus:
             c.t_end = time.time()
             if score and "error" not in score:
                 c.caps = score.get("capabilities", c.caps)
+                c.has_ladder = bool(score.get("capabilities"))
                 if "solved" in score:
                     c.solved_val = bool(score["solved"])
                 c.tier = int(score.get("tier_score", 0))
+                c.crashes = int(score.get("unique_crashes", 0))
                 c.cost = float(score.get("total_usd") or 0.0)
                 c.reason = score.get("terminated_reason", c.reason)
                 c.phase = "error" if c.reason == "error" else "done"
@@ -193,7 +217,8 @@ class SweepStatus:
             glyph = "✓" if c.phase == "done" else "✗"
             style = "green" if c.solved else ("red" if c.phase == "error" else "yellow")
             tail = (c.error if c.phase == "error"
-                    else f"tier {c.tier}/{c.n_graded} · {c.reason}")
+                    else (f"tier {c.tier}/{c.n_graded} · {c.reason}" if c.has_ladder
+                          else f"{c.crashes} crash{'' if c.crashes == 1 else 'es'} · {c.reason}"))
             self.log(f"{glyph} {bug} · {model} · {tail} · ${c.cost:.4f}", style)
 
     def cell_skip(self, model: str, bug: str, sample: int) -> None:
@@ -260,31 +285,51 @@ class SweepStatus:
 
     def models_panel(self) -> Panel:
         with self._lock:
+            ladder = self.show_ladder
             t = Table.grid(padding=(0, 2))
             t.add_column("model", style="bold")
             t.add_column("done", justify="right")
-            t.add_column("solved", justify="right")
-            for k in LADDER:
-                t.add_column(LADDER_HEADS[k], justify="right")
+            if ladder:
+                t.add_column("solved", justify="right")
+                for k in LADDER:
+                    t.add_column(LADDER_HEADS[k], justify="right")
+            else:
+                # `solved` needs the answer key just as the rungs do, so it goes
+                # with them. What a locally-graded sweep has is the count.
+                t.add_column("crashes", justify="right")
             t.add_column("$", justify="right")
-            t.add_row("model", "done", "solved",
-                      *[Text(LADDER_HEADS[k], style="dim") for k in LADDER],
-                      "cost", style="dim")
+            if ladder:
+                t.add_row("model", "done", "solved",
+                          *[Text(LADDER_HEADS[k], style="dim") for k in LADDER],
+                          "cost", style="dim")
+            else:
+                t.add_row("model", "done", "crashes", "cost", style="dim")
             for model in self.models:
                 cells = [c for c in self._cells.values() if c.model == model]
-                graded = [c for c in cells if c.caps]
                 n_cells = len(self.bugs) * len(self.samples)
                 done = sum(1 for c in cells if c.phase in ("done", "error", "skipped"))
-                solved = sum(1 for c in graded if c.solved)
-                agg = {k: sum(1 for c in graded if c.caps.get(k) == "fired") for k in LADDER}
                 cost = sum(c.cost for c in cells)
-                t.add_row(
-                    model,
-                    f"{done}/{n_cells}",
-                    Text(str(solved), style="green" if solved else "dim"),
-                    *[Text(str(agg[k]), style="green" if agg[k] else "dim") for k in LADDER],
-                    f"${cost:.2f}",
-                )
+                if ladder:
+                    graded = [c for c in cells if c.caps]
+                    solved = sum(1 for c in graded if c.solved)
+                    agg = {k: sum(1 for c in graded if c.caps.get(k) == "fired")
+                           for k in LADDER}
+                    t.add_row(
+                        model,
+                        f"{done}/{n_cells}",
+                        Text(str(solved), style="green" if solved else "dim"),
+                        *[Text(str(agg[k]), style="green" if agg[k] else "dim")
+                          for k in LADDER],
+                        f"${cost:.2f}",
+                    )
+                else:
+                    crashes = sum(c.crashes for c in cells)
+                    t.add_row(
+                        model,
+                        f"{done}/{n_cells}",
+                        Text(str(crashes), style="green" if crashes else "dim"),
+                        f"${cost:.2f}",
+                    )
             return Panel(t, title="models", title_align="left",
                          border_style="blue", padding=(0, 1))
 
@@ -338,12 +383,24 @@ class SweepStatus:
             for key in keys:
                 c = self._cells[key]
                 glyph, style = _PHASE_STYLE.get(c.phase, ("·", "dim"))
+                # A locally-graded cell has no rungs to light and no /5 to be
+                # out of; it has a number of distinct crashes. Showing dots and
+                # 0/5 there says the run failed, when it simply measured
+                # something the ladder does not describe.
+                if self.show_ladder:
+                    lad = self._ladder_text(c)
+                    scorecell = Text(f"{c.tier}/{c.n_graded}",
+                                     style="green" if c.solved else "dim")
+                else:
+                    lad = Text("", no_wrap=True)
+                    scorecell = Text(f"{c.crashes} crash" + ("" if c.crashes == 1 else "es"),
+                                     style="green" if c.crashes else "dim")
                 t.add_row(
                     Text(glyph, style=style),
                     c.bug,
                     c.model,
-                    self._ladder_text(c),
-                    Text(f"{c.tier}/{c.n_graded}", style="green" if c.solved else "dim"),
+                    lad,
+                    scorecell,
                     Text(f"${c.cost:.4f}", style="dim"),
                     Text(c.error or c.reason, style="dim", no_wrap=True),
                 )

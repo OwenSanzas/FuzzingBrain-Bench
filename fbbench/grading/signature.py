@@ -55,7 +55,10 @@ KEEP_FRAMES = 4
 # Bumped whenever a rule below changes, so a half-rebuilt crash_signature table
 # is detectable (rows carry the version that produced them).
 #   2: frame paths are reduced to their basename before hashing (_norm_file).
-SIG_VERSION = 2
+#   3: function names drop parameter lists, template arguments and Rust
+#      instantiation hashes (_norm_func); a cyclic trace is ordered like stack
+#      exhaustion whatever its class (_frame_keys).
+SIG_VERSION = 3
 
 # Signature text is display-only — the sha256 is the key — so it can be cut. C++
 # templates demangle to hundreds of characters and would otherwise dominate.
@@ -224,14 +227,40 @@ def _java_frames(text: str) -> list[dict]:
     return out
 
 
-def extract_frames(text: str) -> list[dict]:
-    """Application frames, top first, capped at KEEP_FRAMES.
+def _all_frames(text: str) -> list[dict]:
+    """Every application frame, top first, uncapped.
 
     Native frames win when both kinds are present: a JVM challenge that also
     prints a native trace crashed in native code.
     """
-    frames = _native_frames(text) or _java_frames(text)
-    return frames[:KEEP_FRAMES]
+    return _native_frames(text) or _java_frames(text)
+
+
+def extract_frames(text: str) -> list[dict]:
+    """Application frames, top first, capped at KEEP_FRAMES."""
+    return _all_frames(text)[:KEEP_FRAMES]
+
+
+# What a blown stack looks like: very deep, and built from very few distinct
+# functions. Both halves are load-bearing, and each one alone is wrong:
+#
+#   depth alone — an ordinary crash can sit far down a call chain.
+#   repetition alone — mongoose-02 faults four frames down with
+#     mg_mqtt_next_prop appearing twice, because the compiler inlined it into
+#     itself. Treating that as a cycle sorted its frames and merged seven
+#     distinct faults (lines 4121…4155) into one crash.
+#
+# openscreen-01, for contrast, is 66 frames drawn from 3 functions.
+RECURSION_MIN_DEPTH = 20
+RECURSION_MAX_DISTINCT = 0.5
+
+
+def _is_cyclic(frames: list[dict]) -> bool:
+    """Whether this stack is a repeating cycle, so its top frame is arbitrary."""
+    if len(frames) < RECURSION_MIN_DEPTH:
+        return False
+    distinct = {(f["func"], f["file"]) for f in frames}
+    return len(distinct) <= len(frames) * RECURSION_MAX_DISTINCT
 
 
 # C++ demanglers disagree about one space. LLVM 14 renders nested template
@@ -248,14 +277,105 @@ def extract_frames(text: str) -> list[dict]:
 # whichever side already emits the compact form.
 _TEMPLATE_GAP = re.compile(r">\s+>")
 
+# Rust's legacy mangling ends every path with the symbol hash: `::h` + 16 hex. It
+# encodes the crate version and the generic instantiation, so the same function
+# in a rebuilt crate carries a different one.
+_RUST_HASH = re.compile(r"::h[0-9a-f]{16}$")
+
+# Rust escapes punctuation it cannot put in a symbol. Decoded, these read as
+# ordinary Rust; left alone they are the least legible part of any Rust frame.
+_RUST_ESCAPES = {
+    "$LT$": "<", "$GT$": ">", "$u20$": " ", "$u5b$": "[", "$u5d$": "]",
+    "$u7b$": "{", "$u7d$": "}", "$C$": ",", "$RF$": "&", "$BP$": "*",
+    "$LP$": "(", "$RP$": ")",
+}
+
+# Names where a bracket belongs to the FUNCTION rather than to its signature, and
+# so must survive the stripping below. Longest first: `operator<=>` has to win
+# over `operator<=`, which has to win over `operator<`.
+_BRACKET_IS_THE_NAME = [
+    "(anonymous namespace)",
+    "operator<=>", "operator<<=", "operator>>=", "operator<=", "operator>=",
+    "operator<<", "operator>>", "operator()", "operator[]", "operator->*",
+    "operator->", "operator new[]", "operator delete[]",
+    "operator<", "operator>",
+]
+
+# Trailing qualifiers, left stranded once the parameter list they followed is
+# gone: `Foo::bar(int) const` -> `Foo::bar const`.
+_TRAILING_QUAL = re.compile(r"\s*\b(const|volatile|noexcept)\b\s*$")
+_TRAILING_REF = re.compile(r"\s*&&?\s*$")
+
+
+def _strip_balanced(name: str, opener: str, closer: str) -> str:
+    """Drop every balanced `opener…closer` group.
+
+    Unbalanced input is returned untouched. Frames are truncated by output caps
+    often enough that guessing where a cut-off argument list ended would corrupt
+    more names than it cleaned.
+    """
+    out, depth = [], 0
+    for ch in name:
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            if depth == 0:
+                return name
+            depth -= 1
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out) if depth == 0 else name
+
 
 def _norm_func(func: str) -> str:
-    """A frame's function name, with toolchain-specific formatting removed."""
+    """A frame's function name, reduced to what identifies the function.
+
+    A demangler prints everything the linker needed to keep symbols apart —
+    parameter types, template arguments, Rust's instantiation hash. None of it
+    says where the crash was, and all of it varies with things the fault does
+    not depend on:
+
+        WelsSampleSad8x8_c(unsigned char*, int, unsigned char*, int)
+          -> WelsSampleSad8x8_c
+        harfbuzz_rust::font::_hb_fontations_glyph_name::h4948ba84dce9f35a
+          -> harfbuzz_rust::font::_hb_fontations_glyph_name
+
+    That these renderings are not properties of the crash is not a guess: the
+    `> >` case below is one binary's own frame signing two ways depending on
+    which symbolizer read it. Parameter lists and instantiation hashes are the
+    same kind of noise with more characters.
+
+    The namespace and class stay. `Packer::doPack` and `PackPs1::pack` are
+    different functions and must not collapse onto `pack`.
+    """
     prev = None
     while prev != func:                       # `> > >` needs more than one pass
         prev = func
         func = _TEMPLATE_GAP.sub(">>", func)
-    return func
+
+    func = _RUST_HASH.sub("", func)
+
+    # Hide the brackets that ARE the name, strip the ones that merely describe
+    # it, then put them back.
+    held: list[str] = []
+    for token in _BRACKET_IS_THE_NAME:
+        while token in func:
+            func = func.replace(token, f"\x00{len(held)}\x00", 1)
+            held.append(token)
+    func = _strip_balanced(func, "(", ")")    # parameter list
+    func = _strip_balanced(func, "<", ">")    # template arguments
+    for i, token in enumerate(held):
+        func = func.replace(f"\x00{i}\x00", token)
+
+    func = _TRAILING_REF.sub("", _TRAILING_QUAL.sub("", func))
+
+    # After the angle brackets are gone, so nothing decoded here can be mistaken
+    # for a template argument and stripped: `_$LT$impl$u20$$u5b$T$u5d$$GT$` names
+    # the impl block a method belongs to and has to survive.
+    for escape, ch in _RUST_ESCAPES.items():
+        func = func.replace(escape, ch)
+
+    return func.strip() or _NO_FRAMES
 
 
 def _norm_file(path: str) -> str:
@@ -289,7 +409,8 @@ def _norm_file(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def _frame_keys(frames: list[dict], klass: str) -> list[tuple[str, str, int | None]]:
+def _frame_keys(frames: list[dict], klass: str,
+                cyclic: bool = False) -> list[tuple[str, str, int | None]]:
     """The (func, file, line) triples the signature is built from.
 
     The line number stays in. What is being counted here is CRASHES, not
@@ -302,8 +423,29 @@ def _frame_keys(frames: list[dict], klass: str) -> list[tuple[str, str, int | No
     blows at whichever frame happened to cross the guard page, so `a->b->c->a`
     and `b->c->a->b` are the same crash seen from different starting points.
     Sorting the distinct frames makes the signature invariant to that rotation.
+
+    Which traces those are is decided by the shape of the stack (`cyclic`, from
+    _is_cyclic) as well as by the class name. ASan reports a recursion blowup as
+    whatever signal actually killed the process, so openscreen-01 — 66 frames of
+    readValue/readArray alternating — arrives classed `abrt` and the name test
+    never fires. It signed three ways from one input shape, depending only on
+    where in the cycle the stack ran out. The class test stays for the traces
+    that are named honestly.
     """
     keys = [(_norm_func(f["func"]), _norm_file(f["file"]), f["line"]) for f in frames]
+    if cyclic:
+        # Identify the cycle by the frames that REPEAT. Sorting the top-of-stack
+        # window is not enough on its own: which frames are in the window is
+        # itself decided by where the stack ran out, so openscreen-01 still
+        # signed three ways with the window sorted. What does not move is the set
+        # of frames the recursion goes round — and taking only the repeating ones
+        # leaves out the entry path below the cycle, which would otherwise win a
+        # sort on nothing but its name.
+        seen: dict = {}
+        for k in keys:
+            seen[k] = seen.get(k, 0) + 1
+        repeated = sorted(k for k, n in seen.items() if n > 1)
+        return (repeated or sorted(seen))[:TOP_FRAMES]
     if klass in _STACK_EXHAUSTION:
         keys = sorted(set(keys))
     return keys[:TOP_FRAMES]
@@ -340,8 +482,13 @@ def signature(harness_output: dict) -> Signature | None:
     if klass is None:
         return None
 
-    frames = extract_frames(text)
-    keys = _frame_keys(frames, klass)
+    all_frames = _all_frames(text)
+    frames = all_frames[:KEEP_FRAMES]
+    # A cycle is identified from the WHOLE stack, not from the stored window:
+    # the window holds whichever turn of the cycle was on top when the stack
+    # ran out, which is the thing that has to stop mattering.
+    cyclic = _is_cyclic(all_frames)
+    keys = _frame_keys(all_frames if cyclic else frames, klass, cyclic=cyclic)
 
     # Hash a canonical JSON array rather than a joined string. Separators can
     # occur inside the components themselves — "operator|" is a legal C++

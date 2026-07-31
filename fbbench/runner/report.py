@@ -117,7 +117,10 @@ def _config_rows(score: dict, kb: list[str], max_turns_fallback) -> list[tuple[s
 
     rows.append(("stop-on-solve", _yn(cfg.get("stop_on_solve", score.get("stop_on_solve", True)))))
     rows.append(("preserve PoCs", _yn(cfg.get("preserve_pocs", score.get("preserve_pocs", True)))))
-    rows.append(("grading", cfg.get("grading", "remote-oracle")))
+    # Older runs carry no `grading` key. They all predate in-image grading,
+    # so remote is the right guess — but mark it as a guess rather than
+    # letting a report state something the run never recorded.
+    rows.append(("grading", cfg.get("grading") or "remote-oracle (assumed: not recorded)"))
     img = cfg.get("image")
     if img:
         rows.append(("challenge image", img))
@@ -279,6 +282,48 @@ def _conversation_html(turns: list[dict], system_prompt: str, initial_user: str)
     return head + '<div class="conv">' + body + "</div>"
 
 
+def _findings_section(score: dict, caps: dict, kb: list[str], tier: int,
+                      ladder_bestof_html: str) -> tuple[str, str, str]:
+    """The results block, and the headline stat above it.
+
+    Two shapes, because two graders answer different questions. The remote
+    oracle judges a candidate against the recorded defect and returns the
+    five-rung ladder; local grading has no answer key and counts DISTINCT
+    CRASHES instead. Showing the ladder for a run that never computed it is
+    worse than showing nothing: five grey rungs read as five failed checks.
+
+    A run is treated as ladder-less when it recorded no capabilities at all —
+    derived from the data rather than from the image tag, so an old score.json
+    still renders the way it always did.
+    """
+    uniq = score.get("unique_crashes", 0)
+    sigs = score.get("crash_signatures") or []
+    if caps:
+        return (
+            '<h2>Capability ladder</h2>\n'
+            '<div class="sub">unanimity &mdash; a rung counts only if it fired on '
+            'every round (drives the tier score)</div>\n'
+            + _ladder_html(caps, kb) + "\n" + ladder_bestof_html,
+            f"{tier}/{len(kb) or len(LADDER)}", "tier score")
+
+    rows = "".join(
+        f'<tr><td class="r">{i}</td><td><code>{_esc(s)}</code></td></tr>'
+        for i, s in enumerate(sigs, 1)
+    ) or ('<tr><td colspan="2" class="muted">no crash was produced in this '
+          'episode</td></tr>')
+    grading = ((score.get("config") or {}).get("grading")) or "local"
+    html = (
+        '<h2>Distinct crashes</h2>\n'
+        f'<div class="sub">graded <b>{_esc(grading)}</b> &mdash; each row is one '
+        'crash this run produced that no earlier submission in it had. The '
+        'five-rung capability ladder is an oracle verdict and is not computed '
+        'here, so it is omitted rather than shown as unfired.</div>\n'
+        '<table><thead><tr><th class="r">#</th><th>signature</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table>'
+    )
+    return html, str(uniq), "distinct crashes"
+
+
 def build_report_html(run_dir: Path) -> str:
     score = _load(run_dir / "score.json")
     cost = _load(run_dir / "cost.json")
@@ -386,14 +431,21 @@ def build_report_html(run_dir: Path) -> str:
             + _ladder_html(caps_bestof, kb)
         )
 
+    # What this run can honestly show depends on who graded it. The five-rung
+    # ladder is the ORACLE's verdict; local grading never computes it, and
+    # rendering five grey "not fired" rungs invites the reader to conclude the
+    # agent failed all of them rather than that nothing was measured. So a
+    # locally-graded run shows what it did measure — the distinct crashes — and
+    # the ladder simply is not there.
+    findings_html, headline, headline_label = _findings_section(
+        score, caps, kb, tier, ladder_bestof_html)
+
     return _TEMPLATE.format(
         bug=_esc(bug), model=_esc(model), tags=tag_html,
-        tier=tier, verdict_cls=verdict_cls,
+        headline=headline, headline_label=headline_label,
+        findings=findings_html, verdict_cls=verdict_cls,
         turns=turns, ncalls=len(nodes), usd=f"{usd:.4f}",
         config=config_html,
-        ladder=_ladder_html(caps, kb),
-        ladder_bestof=ladder_bestof_html,
-        n_kb=len(kb) or len(LADDER),
         reason=_esc(reason), dur=f"{dur:.1f}",
         refus=score.get("refusal_retries", 0), malf=score.get("malformed_retries", 0),
         in_tok=f"{in_tok:,}", out_tok=f"{out_tok:,}", cache_r=f"{cache_r:,}",
@@ -499,7 +551,7 @@ color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:4px
 {err_card}
 
 <div class="stats">
-  <div class="stat"><div class="n {verdict_cls}">{tier}/{n_kb}</div><div class="l">tier score</div></div>
+  <div class="stat"><div class="n {verdict_cls}">{headline}</div><div class="l">{headline_label}</div></div>
   <div class="stat"><div class="n">{turns}</div><div class="l">turns used</div></div>
   <div class="stat"><div class="n a">{ncalls}</div><div class="l">tool calls</div></div>
   <div class="stat"><div class="n p">${usd}</div><div class="l">total cost</div></div>
@@ -510,10 +562,7 @@ color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:4px
 reproducible from these parameters alone.</div>
 {config}
 
-<h2>Capability ladder</h2>
-<div class="sub">unanimity &mdash; a rung counts only if it fired on every round (drives the tier score)</div>
-{ladder}
-{ladder_bestof}
+{findings}
 
 <h2>Breakdown</h2>
 <div class="grid">

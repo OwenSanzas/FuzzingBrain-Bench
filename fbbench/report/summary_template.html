@@ -133,6 +133,13 @@ or crash location appears here or in the linked reports.</div>
 <script>
 const D = JSON.parse(document.getElementById("data").textContent);
 const LADDER = ["reach","crash","differential","class","site"];
+// Whether this sweep has an oracle ladder at all. Locally-graded runs do not:
+// they count distinct crashes and never compute the rungs, so every ladder cell
+// would render empty and every tier as 0 — which looks like a uniformly failed
+// sweep rather than a sweep that measured something else.
+const HAS_LADDER = DATA.graded_ladder !== false;
+const SCORE_KEY = HAS_LADDER ? "tier" : "crashes";
+const SCORE_LABEL = HAS_LADDER ? "tier" : "crashes";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // --- header tags + stats ---
@@ -185,7 +192,7 @@ const cfgRows = [
   ["force-full", yn(C.force_full)],
   ["require-preset", yn(C.require_preset)],
   ["preserve PoCs", yn(C.preserve_pocs)],
-  ["grading", C.grading ?? "remote-oracle"],
+  ["grading", C.grading ?? "not recorded"],
 ];
 document.getElementById("config").innerHTML =
   cfgRows.map(([k,v]) => `<tr><td>${esc(k)}</td><td class="r">${esc(v)}</td></tr>`).join("");
@@ -196,7 +203,7 @@ const byKey = {};   // bug -> model -> best cell
 for (const c of cells){
   (byKey[c.bug] = byKey[c.bug] || {});
   const cur = byKey[c.bug][c.model];
-  if (!cur || c.tier > cur.tier) byKey[c.bug][c.model] = c;
+  if (!cur || c[SCORE_KEY] > cur[SCORE_KEY]) byKey[c.bug][c.model] = c;
 }
 // per-model tally for the header row
 const tally = {};
@@ -225,21 +232,24 @@ function renderLadder(filter){
                                 (f === m.toLowerCase()));
   bugs = bugs.slice().sort((a,b)=>{                 // solved/high tier first
     const ca=(byKey[a]||{})[m], cb=(byKey[b]||{})[m];
-    return (cb?cb.tier:-1)-(ca?ca.tier:-1) || a.localeCompare(b);
+    return (cb?cb[SCORE_KEY]:-1)-(ca?ca[SCORE_KEY]:-1) || a.localeCompare(b);
   });
   let head = `<tr><th class="bug">bug (${bugs.length})</th><th>D</th>`;
-  for (const k of LADDER) head += `<th>${LADDER_LABEL[k]}</th>`;
-  head += `<th>tier</th><th>cost</th><th>report</th></tr>`;
+  if (HAS_LADDER) for (const k of LADDER) head += `<th>${LADDER_LABEL[k]}</th>`;
+  head += `<th>${SCORE_LABEL}</th><th>cost</th><th>report</th></tr>`;
   let rows = "";
   for (const b of bugs){
     const c = (byKey[b]||{})[m];
     const solved = !!(c && c.solved);
     rows += `<tr class="${solved?'solved':''}"><td class="bug">${esc(b)}</td>`;
     rows += `<td class="diff d${c&&c.d?c.d:0}">${c && c.d ? 'D'+c.d : '—'}</td>`;
-    for (const k of LADDER) rows += rungCell(c ? (c.caps||{})[k] : null);
-    const tier = c ? c.tier : 0;
-    const tcls = solved ? "solved" : (tier===0 ? "t0" : "");
-    rows += `<td class="tier ${tcls}">${c ? tier+"/5" : "—"}${solved?" ★":""}</td>`;
+    if (HAS_LADDER) for (const k of LADDER) rows += rungCell(c ? (c.caps||{})[k] : null);
+    const val = c ? c[SCORE_KEY] : 0;
+    const tcls = solved ? "solved" : (val===0 ? "t0" : "");
+    // "n/5" is a ladder statement. A distinct-crash count has no denominator —
+    // there is no known number of crashes a challenge is supposed to yield.
+    const shown = c ? (HAS_LADDER ? val+"/5" : String(val)) : "—";
+    rows += `<td class="tier ${tcls}">${shown}${solved?" ★":""}</td>`;
     rows += `<td class="cost">${c ? "$"+(c.cost||0).toFixed(3) : "—"}</td>`;
     rows += `<td>${c && c.report ? `<a class="rep" href="${esc(c.report)}">view ›</a>` : "—"}</td>`;
     rows += `</tr>`;

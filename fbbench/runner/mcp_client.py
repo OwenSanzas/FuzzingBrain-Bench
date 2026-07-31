@@ -21,6 +21,46 @@ from typing import Any
 # baked into the (unrebuilt) challenge image.
 EXEC_TIMEOUT_CAP_S = 300
 
+# This checkout's crash-signature rules, and where they are mounted so the
+# in-image grader uses them. See `sig_rules_args`.
+SIG_RULES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "grading", "signature.py")
+SIG_RULES_IN_CONTAINER = "/opt/fbbench/signature.current.py"
+
+
+def sig_rules_args() -> list[str]:
+    """`docker run` flags making the in-image grader score with THIS checkout's
+    crash-signature rules instead of the copy baked into the image.
+
+    A self-contained image grades locally, and names each crash with the
+    signature script `build_challenge` vendored into it when the image was
+    built. That copy is frozen at build time, so a rules fix reaches a published
+    image only by rebuilding and republishing all of them — and until it does,
+    the image counts distinct crashes by one set of rules while everything
+    downstream reads them by another. Mounting the current file closes that gap
+    for every runner-driven episode, which is what a sweep is.
+
+    Read-only, and deliberately so: the agent has exec in this container, and a
+    writable scoring rule is one `printf` away from every crash being novel.
+
+    Two things this does NOT cover, both by nature. An image driven directly by
+    an external user gets its baked copy — nothing here runs for them. And the
+    remote grading backend keeps its own copy, so the two still have to be moved
+    together; this only removes the image from that list.
+
+    Set BENCH_SIG_SCRIPT on the host to override (including to the baked path,
+    to measure exactly what an external user would get).
+    """
+    if os.environ.get("BENCH_SIG_SCRIPT"):
+        return ["-e", f"BENCH_SIG_SCRIPT={os.environ['BENCH_SIG_SCRIPT']}"]
+    if not os.path.isfile(SIG_RULES):
+        # Better to grade with the baked rules than to mount nothing at the path
+        # we then point the server at: a missing script makes every crash
+        # `<unsigned>`, which silently collapses them all into one.
+        return []
+    return ["-v", f"{SIG_RULES}:{SIG_RULES_IN_CONTAINER}:ro",
+            "-e", f"BENCH_SIG_SCRIPT={SIG_RULES_IN_CONTAINER}"]
+
 
 # The neutral <project>-NN alias for a bug dir (the image tag is named by it).
 def _full_scan_alias(real_bug_dir: str) -> str:
@@ -102,6 +142,7 @@ class MCPClient:
                     cmd += ["--add-host", "host.docker.internal:host-gateway"]
                     break
             cmd += ["-e", f"BENCH_GRADE_URL={grade_url}"]
+        cmd += sig_rules_args()
         cmd += run_env_args(run)
         cmd += [image, "mcp-server"]
         bug_dir, workspace = "/src", "/workspace"

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sys
 
-from fbbench.grading.signature import signature
+from fbbench.grading.signature import _norm_func, signature
 
 # A real libFuzzer OOM trace (ghidra rust-demangler), trimmed — the allocator
 # interceptor (#0) must be skipped and the top app frames kept.
@@ -101,6 +101,38 @@ _GRADED_OTHER_SITE = _unsym("/tmp/fbgrade-f4p96gu7/oracle/binaries/vuln/asan/har
                             offset="0x154627")
 
 
+# Each function recurses from its own call site, so its line is a property of the
+# function and not of where in the cycle it happens to appear. (These are the
+# real lines from openscreen's jsoncpp.)
+_LINE_OF = {
+    "Json::OurReader::readValue": 1075,
+    "Json::OurReader::readArray": 1529,
+    "Json::OurReader::readObject": 1601,
+}
+
+
+def _recursion(cycle: list[str]) -> dict:
+    """A stack blown by `cycle`, repeated — and reported as ABRT, which is how
+    ASan classes a recursion blowup that libc aborted on."""
+    trace = "\n".join(
+        f"    #{i} 0x5{i} in {cycle[i % len(cycle)]} "
+        f"/src/jsoncpp/json_reader.cpp:{_LINE_OF[cycle[i % len(cycle)]]}:9"
+        for i in range(40))
+    return {"exit_code": 66, "signal": "",
+            "stderr": "==1==ERROR: AddressSanitizer: ABRT on unknown address\n"
+                      + trace + "\nSUMMARY: AddressSanitizer: ABRT (libc.so.6+0x9eb2c)",
+            "stdout": ""}
+
+
+# One input shape, two runs whose stacks ran out at different points in the same
+# cycle. Nothing about the fault differs — only where the guard page fell.
+_CYCLE_FROM_ARRAY = _recursion(["Json::OurReader::readArray", "Json::OurReader::readValue"])
+_CYCLE_FROM_VALUE = _recursion(["Json::OurReader::readValue", "Json::OurReader::readArray"])
+# A different cycle through the same reader IS a different crash: `{{{{` does not
+# recurse the way `[[[[` does.
+_CYCLE_OBJECT = _recursion(["Json::OurReader::readObject", "Json::OurReader::readValue"])
+
+
 def _text(run: dict) -> str | None:
     sig = signature(run)
     return sig.sig_text if sig else None
@@ -153,9 +185,58 @@ def main() -> int:
     # proves the function is deterministic, which no plausible bug breaks — what
     # broke was one fault arriving under a different path per grading run and
     # counting again every time.
+    # A demangler's bookkeeping is not part of a crash. Checked on _norm_func
+    # directly: these are the shapes the corpus actually produces, and asserting
+    # them here is what keeps a later rule from quietly eating a name it should
+    # have kept.
+    for name, got, want in [
+        ("parameter list dropped",
+         _norm_func("WelsSampleSad8x8_c(unsigned char*, int, unsigned char*, int)"),
+         "WelsSampleSad8x8_c"),
+        ("template arguments dropped",
+         _norm_func("WelsVP::CSceneChangeDetection<WelsVP::CSceneChangeDetectorVideo>"
+                    "::Process(int, SPixMap*, SPixMap*)"),
+         "WelsVP::CSceneChangeDetection::Process"),
+        ("rust instantiation hash dropped",
+         _norm_func("harfbuzz_rust::font::_hb_fontations_glyph_name::h4948ba84dce9f35a"),
+         "harfbuzz_rust::font::_hb_fontations_glyph_name"),
+        ("rust escapes decoded, impl block kept",
+         _norm_func("core::slice::_$LT$impl$u20$$u5b$T$u5d$$GT$::copy_from_slice"
+                    "::hc84a7ee1d4de3ee8"),
+         "core::slice::_<impl [T]>::copy_from_slice"),
+        # The brackets in these are the function's own name, not a signature.
+        ("operator() survives",
+         _norm_func("WelsVP::CSceneChangeDetectorVideo::operator()(WelsVP::SLocalParam&)"),
+         "WelsVP::CSceneChangeDetectorVideo::operator()"),
+        ("operator< survives", _norm_func("Cmp::operator<(Cmp const&) const"),
+         "Cmp::operator<"),
+        ("anonymous namespace survives", _norm_func("(anonymous namespace)::DoThing(int)"),
+         "(anonymous namespace)::DoThing"),
+        # The class qualifies the function; dropping it would merge real bugs.
+        ("class qualification kept", _norm_func("PackPs1::pack(OutputFile*)"),
+         "PackPs1::pack"),
+        # A truncated name is left whole rather than cut at a guess.
+        ("unbalanced name left alone", _norm_func("Foo::bar(int, std::vector<int"),
+         "Foo::bar(int, std::vector<int"),
+        ("a plain C name is untouched", _norm_func("mg_match"), "mg_match"),
+    ]:
+        good = got == want
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] {name}: {got!r}")
+        if not good:
+            print(f"         expected: {want!r}")
+
+    # Two different cycles through one parser are two crashes; the same cycle
+    # entered at a different point is one.
+    diff_cycle = signature(_CYCLE_FROM_ARRAY).canon_sig != signature(_CYCLE_OBJECT).canon_sig
+    ok = ok and diff_cycle
+    print(f"  [{'PASS' if diff_cycle else 'FAIL'}] a different cycle stays distinct")
+
     for name, a, b in (
         ("one crash, two grading runs", _GRADED_REMOTE, _GRADED_REMOTE_AGAIN),
         ("one crash, graded remotely and in-image", _GRADED_REMOTE, _GRADED_IN_IMAGE),
+        # ABRT, not stack-overflow: caught by the frames, not by the class name.
+        ("one cycle, two blow-up points", _CYCLE_FROM_ARRAY, _CYCLE_FROM_VALUE),
     ):
         same = signature(a).canon_sig == signature(b).canon_sig
         ok = ok and same

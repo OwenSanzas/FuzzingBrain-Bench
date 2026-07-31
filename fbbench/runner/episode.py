@@ -208,6 +208,12 @@ class EpisodeResult:
     # is the headline score; the capability ladder above is diagnostic only.
     crash_signatures: set[str] = field(default_factory=set)
     unique_crashes: int = 0
+    # Which grader actually answered, observed rather than assumed: the image
+    # decides, from whether a harness is baked into it, and the runner only finds
+    # out by grading something. Empty until a candidate is graded — a run where
+    # the model never submitted anything has no answer to give, and reporting a
+    # guess there is how a config field stops being evidence.
+    grading: str = ""
     turns_used: int = 0
     duration_s: float = 0.0
     input_tokens: int = 0
@@ -546,6 +552,13 @@ def run_episode(
                     # target_found is otherwise read for SCORING, never surfaced.
                     if target_found:
                         solved_hit = True
+                    # The in-image grader says so itself; anything else came off
+                    # the wire. Recorded on every grade rather than only the
+                    # first, so a run that somehow changed graders mid-episode
+                    # reports the last one that actually answered instead of a
+                    # stale first impression.
+                    result.grading = ("in-image" if out.get("grading") == "local"
+                                      else "remote-oracle")
                     if out.get("crashed") or (bestof_now or caps_now).get("crash") == "fired":
                         crashed_hit = True
                         sig = _crash_identity(out)

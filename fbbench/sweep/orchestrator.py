@@ -99,6 +99,7 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              seed: int | None = None, batch: str | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
+             image_tag: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
     truth so the single and multi paths forward the SAME per-cell flags."""
@@ -117,19 +118,23 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
         cmd += ["--api-key", api_key]
     if image_prefix:
         cmd += ["--image-prefix", image_prefix]
+    if image_tag:
+        cmd += ["--image-tag", image_tag]
     return cmd
 
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
              stop_on_solve: bool = False, api_key: str | None = None,
-             image_prefix: str | None = None, runner: list[str] | None = None,
+             image_prefix: str | None = None, image_tag: str | None = None,
+             runner: list[str] | None = None,
              batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
                    seed=sample, batch=batch,
                    preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                   api_key=api_key, image_prefix=image_prefix, runner=runner)
+                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag,
+                   runner=runner)
     try:
         # The episode self-stops at `timeout`; SIGKILL only if it overruns the
         # graceful-writeout backstop (so a solved run isn't lost to the killer).
@@ -150,9 +155,22 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
     crash_score = pool.batch_score(uid) if uid else None
     by_model = {m["model"]: m for m in (crash_score or {}).get("models", [])}
 
+    # The five-rung ladder is the ORACLE's verdict. A locally-graded sweep never
+    # computes it, and printing five zero columns would read as "the model failed
+    # every rung" rather than "nothing measured this". So the columns appear only
+    # when some cell actually recorded a ladder.
+    graded_ladder = any(
+        (cell_dir(out, bug, model, seed) / "score.json").is_file()
+        and json.loads((cell_dir(out, bug, model, seed) / "score.json").read_text()
+                       ).get("capabilities")
+        for model in models for bug in bugs for seed in seeds)
+
     print("\n" + "=" * 78)
-    print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
-          f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
+    if graded_ladder:
+        print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
+              f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
+    else:
+        print(f"  {'model':24s} {'uniqCr':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
     print("  " + "-" * 90)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
@@ -193,12 +211,22 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 solved += 1
         cs = by_model.get(model)
         uniq = f"{cs['crashes_found']}" if cs else f"{crashes}"
-        print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
-              f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
-              f"{refusals:>6d} {cost:>8.2f}")
+        if graded_ladder:
+            print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
+                  f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
+                  f"{refusals:>6d} {cost:>8.2f}")
+        else:
+            # `solved` needs the answer key too, so it goes with the ladder; what
+            # is left is how many challenges the model was run against.
+            print(f"  {model:24s} {uniq:>7s} {n:>7d} {refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
     if crash_score is None:
-        print("  (uniqCr unavailable: no batch id recorded, or the oracle could not be reached)")
+        # Only worth saying when the oracle was the ONLY possible source. A
+        # locally-graded sweep counts its own crashes and just printed them, so
+        # announcing they are unavailable directly contradicts the table above.
+        if graded_ladder:
+            print("  (uniqCr from the oracle unavailable: no batch id recorded, or the "
+                  "oracle could not be reached — counts above are the cells' own)")
     else:
         for m in crash_score.get("models", []):
             print(f"  {m['model']}: {m['crashes_found']} distinct crashes over "
@@ -248,6 +276,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                jobs: int = 1, dashboard_pref: bool | None = None,
                preserve_pocs: bool = True, stop_on_solve: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
+               image_tag: str | None = None,
                report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
                model_map: dict[str, str] | None = None) -> int:
@@ -303,7 +332,13 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # One id for the whole matrix, so every grade it produces rolls up to the
     # flags that defined it. A resumed sweep gets a NEW id: it is a different
     # experiment in wall-clock terms even when the cells are the same.
-    batch_uid = register_batch(out.name, {
+    #
+    # Skipped entirely for a locally-graded sweep. The id exists so the ORACLE
+    # can group the submissions it receives, and a self-contained image sends it
+    # none — so registering was a network round trip whose only visible effect
+    # was a 404 warning about grouping that was never going to happen.
+    local_grading = (image_tag or "latest") != "latest"
+    batch_uid = "" if local_grading else register_batch(out.name, {
         "models": models, "bugs": len(bugs), "samples": samples,
         "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
         "stop_on_solve": stop_on_solve, "output": str(out),
@@ -332,8 +367,11 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
         print(f"  note: the live dashboard is not available for --arm {arm} yet — "
               f"using line-by-line logs (per-cell transcript + report are still produced).",
               flush=True)
+    # The self-contained images grade in-image and produce no ladder. Passed as
+    # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
-                     max_turns=max_turns, total=len(cells), already_done=done)
+                     max_turns=max_turns, total=len(cells), already_done=done,
+                     expect_ladder=(image_tag or "latest") == "latest")
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME
@@ -360,7 +398,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                            api_key=api_key, image_prefix=image_prefix, runner=runner,
+                            api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner,
                             batch=batch_uid)
         except Exception as e:  # noqa: BLE001
             import traceback
@@ -409,7 +447,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                    seed=sample, batch=batch_uid,
                                    preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
-                                   api_key=api_key, image_prefix=image_prefix, runner=runner)
+                                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
                     STATUS.cell_finish(model, bug, sample, r)
