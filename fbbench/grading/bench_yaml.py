@@ -76,15 +76,22 @@ def find_bug(bug_id: str, repo: Path = REPO) -> Path | None:
 def is_active(bug_dir: Path) -> bool:
     """Whether a bug is part of the active corpus.
 
-    A bug is inactive only if its vuln.yaml sets `active: false` (e.g. a parked
-    third-party-lib bug). Missing vuln.yaml or missing field => active. `active`
-    is a flat top-level scalar, so the stdlib reader handles it (no PyYAML).
+    A bug is inactive if EITHER file sets `active: false`. vuln.yaml is where the
+    dev tree parks a bug; bench.yaml is the only one of the two that exists in
+    the public tree, so a bug that has to be parked for everyone has to say so
+    there. Missing file or missing field => active.
+
+    `active` is a flat top-level scalar, so the stdlib reader handles it (no
+    PyYAML).
     """
-    p = Path(bug_dir) / "vuln.yaml"
-    if not p.is_file():
-        return True
-    v = read_bench(p).get("active", "true")
-    return str(v).strip().lower() not in ("false", "no", "0", "off")
+    for name in ("vuln.yaml", "bench.yaml"):
+        p = Path(bug_dir) / name
+        if not p.is_file():
+            continue
+        v = read_bench(p).get("active", "true")
+        if str(v).strip().lower() in ("false", "no", "0", "off"):
+            return False
+    return True
 
 
 def list_bugs(repo: Path = REPO, include_inactive: bool = False) -> list[tuple[str, Path]]:

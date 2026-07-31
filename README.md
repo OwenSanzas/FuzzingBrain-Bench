@@ -1,7 +1,7 @@
 # FuzzingBrain Bench
 
 **A capability-ladder benchmark for LLM-driven vulnerability reproduction on
-69 real zero-day bugs across 41 open-source projects (C / C++ / Java).**
+68 real zero-day bugs across 40 open-source projects (C / C++ / Java).**
 
 Each challenge gives the agent only the **fuzz harness** (the target) and the
 project source at the vulnerable revision — no patch, no fix commit, no target
@@ -12,12 +12,12 @@ private grading service, which returns only a verdict on the capability ladder.
 
 | Challenges | Projects | Languages | Grader |
 |---|---|---|---|
-| **69** end-to-end | **41** | C · C++ · Java | deterministic remote oracle |
+| **68** end-to-end | **40** | C · C++ · Java | deterministic remote oracle |
 
 Nothing in the images or this repository reveals what a bug is — challenges are
 named by neutral alias (`<project>-NN`, e.g. `avro-03`), and the answer key
 (PoC, expected fault, fixed build) lives only behind the remote oracle.
-**Browse all 69:** [`tools/sealed/CHALLENGES.md`](tools/sealed/CHALLENGES.md).
+**Browse all 68:** [`tools/sealed/CHALLENGES.md`](tools/sealed/CHALLENGES.md).
 
 ---
 
@@ -41,7 +41,7 @@ GEMINI_API_KEY=...
 DEEPSEEK_API_KEY=sk-...
 EOF
 
-fb-bench list                                 # the 69 challenges (by alias)
+fb-bench list                                 # the 68 challenges (by alias)
 fb-bench models                               # supported models + which keys are loaded
 ```
 
@@ -220,7 +220,7 @@ over an MCP server (`setup` / `read_file` / `list_directory` / `write_file` /
 holds the answer key and returns only the verdict.
 
 ```
-docker.io/osanzas/fbbench-challenge-<alias>:latest     # 69 public images
+docker.io/osanzas/fbbench-challenge-<alias>:latest     # 68 public images
 ```
 
 Grading is a network call to the remote oracle (the answer key never ships with
