@@ -10,3 +10,7 @@ runs/
 
 # internal working docs — never publish (audits, host/image notes, strategy, …)
 _internal/
+
+# Built MCP server binary — a build artifact, produced by `make mcp-server`
+# and baked into challenge images; never committed.
+bin/

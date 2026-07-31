@@ -77,7 +77,11 @@ type server struct {
 	// unavailable (BENCH_ALLOW_NET=1) — otherwise exec() is refused.
 	netIsolate bool
 	allowNet   bool
-	enc        *json.Encoder
+	// seenSigs is this episode's crash pool: the signatures run_poc_on_harness
+	// has already produced. One container is one episode, so process memory is
+	// exactly the right scope — see observe() in gradelocal.go.
+	seenSigs map[string]bool
+	enc      *json.Encoder
 }
 
 func main() {
