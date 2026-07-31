@@ -369,19 +369,61 @@ _BUDGET_NOTE_FMT = _reg("budget_note",
     fills="done (turns used), max_turns, remaining")
 
 _BUDGET_LOW_SUFFIX = _reg("budget_low_suffix", """
- You are running low; write your BEST candidate and call run_poc_on_harness() on it now; \
-spend your remaining turns getting an input that faults rather than exploring.""",
-    when="Appended to the budget note once >=75% of the turn budget is spent.",
-    why="A wrap-up nudge to spend the last turns on the best candidate / highest "
-        "still-reachable capability rather than exploring.")
+ You are running low on turns; submit any candidate you have not run through \
+run_poc_on_harness() yet, and spend what is left reaching a fault you have not already \
+produced rather than refining one you have.""",
+    when="Appended to the budget note when the run crosses one of the marks in "
+         "BUDGET_LOW_MARKS, and only on that turn.",
+    why="Both halves are worth points and neither is obvious under time pressure. "
+        "A candidate that is never submitted scores nothing, and agents routinely "
+        "write more than they submit. A variant of a crash already found produces "
+        "the same signature and adds nothing, so polishing one in the last turns "
+        "is wasted where a different fault is not. The earlier wording told the "
+        "agent to stop exploring, which was right when a run was scored on the one "
+        "planted bug and is backwards now that it is scored on distinct crashes.")
+
+
+# Fractions of the turn budget at which the low-budget nudge fires, on the turn
+# that crosses each one. Fractions rather than a fixed interval so the behaviour
+# is the same shape at any budget: always four reminders, always at the same
+# relative moments, whether the run has 25 turns or 200. A fixed "every N turns"
+# gets sparser as budgets grow and denser as they shrink, which is backwards on
+# both ends.
+#
+# The gaps close as the budget drains (25% of it, then 10, 8, 5) because that is
+# how the urgency actually behaves.
+BUDGET_LOW_MARKS = (0.75, 0.85, 0.93, 0.98)
 
 
 def budget_note(done: int, max_turns: int, remaining: int) -> str:
-    """The per-turn budget line, with the low-budget suffix from 75% spent on."""
+    """The per-turn budget line, plus the low-budget nudge on crossing turns only.
+
+    The line itself goes out every turn: it is forty characters, and a model that
+    has to count its own turns to know where it stands will get it wrong. The
+    nudge does not. Repeating one instruction on every turn of the last quarter
+    is not a reminder, it is the loudest thing in the context -- in one 68-run
+    sweep it went out 1100 times and accounted for half of all the budget text
+    the agents read.
+    """
     note = _BUDGET_NOTE_FMT.format(done=done, max_turns=max_turns, remaining=remaining)
-    if remaining > 0 and done >= 0.75 * max_turns:
+    if remaining > 0 and _crosses_low_mark(done, max_turns):
         note += _BUDGET_LOW_SUFFIX
     return note
+
+
+def _crosses_low_mark(done: int, max_turns: int) -> bool:
+    """Whether this exact turn is the first at or past one of the marks.
+
+    Comparing against the previous turn is what makes it fire once per mark
+    rather than on every turn after the first one.
+    """
+    if max_turns <= 0:
+        return False
+    for frac in BUDGET_LOW_MARKS:
+        mark = frac * max_turns
+        if done >= mark > done - 1:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
