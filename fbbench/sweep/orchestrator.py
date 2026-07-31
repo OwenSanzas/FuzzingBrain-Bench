@@ -19,6 +19,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from fbbench.grading import pool
 from fbbench.grading import (
     DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
@@ -128,10 +129,18 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
 
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
+    # Unique crashes are counted by the oracle, which is the only side that knows
+    # which crashes are the same one. Absent (no batch id, oracle unreachable)
+    # the column is left blank rather than zeroed — zero would be a claim about
+    # the run, and this is a claim about the lookup.
+    uid = pool.batch_uid(out)
+    crash_score = pool.batch_score(uid) if uid else None
+    by_model = {m["model"]: m for m in (crash_score or {}).get("models", [])}
+
     print("\n" + "=" * 78)
-    print(f"  {'model':24s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
+    print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
           f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
-    print("  " + "-" * 82)
+    print("  " + "-" * 90)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
         solved = refusals = n = 0
@@ -165,10 +174,19 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 agg[k] += int(caps[k])
             if bug_solved:
                 solved += 1
-        print(f"  {model:24s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
+        cs = by_model.get(model)
+        uniq = f"{cs['crashes_found']}" if cs else ("-" if crash_score is None else "0")
+        print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
               f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
               f"{refusals:>6d} {cost:>8.2f}")
-    print("=" * 82)
+    print("=" * 90)
+    if crash_score is None:
+        print("  (uniqCr unavailable: no batch id recorded, or the oracle could not be reached)")
+    else:
+        for m in crash_score.get("models", []):
+            print(f"  {m['model']}: {m['crashes_found']} distinct crashes over "
+                  f"{m['challenges']} challenge(s) — {m['preset_solved']} preset, "
+                  f"{m['off_target']} off-target ({m['unpatched_upstream']} still crash the fixed build)")
 
 
 def register_batch(name: str, params: dict) -> str:
@@ -192,6 +210,20 @@ def register_batch(name: str, params: dict) -> str:
         print(f"  note: could not register this batch ({e}); results will still group "
               f"under {batch_uid[:12]} but their flags will not be recorded")
     return batch_uid
+
+
+def _write_summary(out: Path, models: list[str], bugs: list[str], seeds: list[int],
+                   max_turns: int, elapsed_s: float | None) -> None:
+    """Write the self-contained, answer-free summary page. Never fatal: a run
+    that finished should not be reported as failed because its page could not be
+    rendered."""
+    try:
+        from fbbench.report import write_summary
+        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=seeds,
+                            max_turns=max_turns, elapsed_s=elapsed_s)
+        print(f"  summary: {idx}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  (summary generation skipped: {e})")
 
 
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
@@ -238,6 +270,10 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
 
     if report_only:
         aggregate(out, models, bugs, seeds)
+        # Rebuild index.html too. --report-only used to print the leaderboard and
+        # leave the page as it was, so a page written before a scoring change kept
+        # showing the old numbers with no sign it was stale.
+        _write_summary(out, models, bugs, seeds, max_turns, elapsed_s=None)
         return 0
 
     # samples-major order: one full (model x bug) pass per sample, so repeats of
@@ -255,6 +291,11 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
         "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
         "stop_on_solve": stop_on_solve, "output": str(out),
     })
+    # Persist it so `--report-only` months later can still ask the oracle what
+    # this sweep found. Without it the id lives only in the cells' score.json,
+    # and a report over a partially-deleted output tree loses the batch entirely.
+    (out / "batch.json").write_text(json.dumps(
+        {"batch_uid": batch_uid, "name": out.name}, indent=2) + "\n")
 
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
@@ -374,12 +415,5 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     print(f"\n  done in {elapsed:.0f}s, spent ~${spent:.2f} total (all cells on disk)")
     aggregate(out, models, bugs, seeds)
 
-    # Self-contained, answer-free summary page.
-    try:
-        from fbbench.report import write_summary
-        idx = write_summary(out, exp=out.name, models=models, bugs=bugs, samples=seeds,
-                            max_turns=max_turns, elapsed_s=elapsed)
-        print(f"  summary: {idx}")
-    except Exception as e:  # noqa: BLE001
-        print(f"  (summary generation skipped: {e})")
+    _write_summary(out, models, bugs, seeds, max_turns, elapsed_s=elapsed)
     return 0

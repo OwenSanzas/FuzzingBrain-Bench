@@ -137,6 +137,12 @@ def main() -> int:
     score = {
         "bug_id": result.bug_id,
         "model": result.model,
+        # Identity, not score. The oracle knows which distinct crashes this run
+        # found; the runner deliberately does not, because a runner that knows
+        # can leak it back into the episode. Recording the id lets the report --
+        # which runs afterwards, outside any episode -- ask the oracle.
+        "run_uid": run_identity["uid"],
+        "batch_uid": run_identity["batch"] or None,
         # Every run knob that shaped this episode — surfaced verbatim in the
         # report so a result is fully reproducible from its own score.json.
         "config": {

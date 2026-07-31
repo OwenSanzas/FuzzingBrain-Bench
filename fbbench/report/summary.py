@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from fbbench.grading import pool
+
 _TEMPLATE = Path(__file__).with_name("summary_template.html")
 _DIFFICULTY = Path(__file__).with_name("difficulty.json")
 LADDER = ["reach", "crash", "differential", "class", "site"]
@@ -83,6 +85,15 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
     samples = samples if samples is not None else s_samples
 
     difficulty, max_score = _load_difficulty()
+
+    # Unique crashes come from the oracle: it is the only side that can tell one
+    # crash from another, and a runner that could would be able to leak it into
+    # the episode. Safe to read HERE — a summary is built after every episode has
+    # ended. None when there is no batch id or the oracle is unreachable, which
+    # the template renders as absent rather than as zero.
+    uid = pool.batch_uid(exp_dir)
+    crash_score = pool.batch_score(uid) if uid else None
+    crashes_by_cell = pool.per_challenge_crashes(crash_score)
     cells = []
     cost_sum = 0.0
     cfg_seen: dict[str, set] = {}     # config key -> set of values seen across cells
@@ -103,9 +114,14 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                         continue
                     cfg_seen.setdefault(k, set()).add(v)
                 report = cd / "report.html"
+                cell_crashes = crashes_by_cell.get((model, bug))
                 cells.append({
                     "bug": bug, "model": model, "sample": sample,
                     "tier": int(sc.get("tier_score", 0)),
+                    # Distinct crashes this cell produced; None when unknown.
+                    "uniq_crashes": cell_crashes["crashes"] if cell_crashes else None,
+                    "uniq_unpatched": (cell_crashes["unpatched_upstream"]
+                                       if cell_crashes else None),
                     "d": int(difficulty.get(bug, 0)),  # published difficulty 1..5
                     "caps": caps,
                     "solved": _solved(sc),
@@ -140,6 +156,14 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "total_cost": total_cost if total_cost is not None else cost_sum,
         "elapsed_s": elapsed_s,
         "max_score": max_score,
+        # The legacy difficulty score (out of max_score) is kept alongside this
+        # one, not replaced: it is the number every earlier result is expressed
+        # in, and dropping it would make this run incomparable with all of them.
+        "crash_score": ({
+            "batch_uid": crash_score.get("batch_uid"),
+            "cap_per_challenge": crash_score.get("cap_per_challenge"),
+            "models": crash_score.get("models", []),
+        } if crash_score else None),
         "cells": cells,
     }
 
