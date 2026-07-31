@@ -309,9 +309,15 @@ def run_episode(
         except (ValueError, TypeError):
             return payload
 
+    # Which oracle graded this episode. It decides where every verdict came
+    # from and is invisible in the results, so without it a run that silently
+    # graded against the wrong backend is indistinguishable afterwards from one
+    # that did not. "image default" means the endpoint baked into the challenge
+    # image, which is the case for every run that does not override it.
     log({"event": "start", "model": backend.model, "bug_id": bug_id,
          "capability_set": sorted(kb),
          "preserve_pocs": bool(poc_root),
+         "grade_url": os.environ.get("BENCH_GRADE_URL") or "image default",
          "system_prompt_chars": len(sysp)})
 
     tlog({"event": "start", "model": backend.model, "bug_id": bug_id,

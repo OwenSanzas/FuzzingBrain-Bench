@@ -88,6 +88,20 @@ class MCPClient:
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
                "-e", "BENCH_GRADE_REVEAL=1"]
+        # Send grades somewhere other than the endpoint the image was baked
+        # with, when the operator names one. mcp-server reads BENCH_GRADE_URL at
+        # run time, so this redirects a published image without rebaking it --
+        # which is what makes a local grading backend possible at all.
+        #
+        # Conditional on purpose. Unset means the argument is not passed and the
+        # image keeps its own value, so an external user, and any run that does
+        # not opt in, is bit-for-bit unaffected. Passing a default here instead
+        # would repeat a failure this repo has already had: a local address
+        # shipped as the default made every published image unable to grade, and
+        # nothing raised -- the requests simply went nowhere.
+        grade_url = os.environ.get("BENCH_GRADE_URL")
+        if grade_url:
+            cmd += ["-e", f"BENCH_GRADE_URL={grade_url}"]
         cmd += run_env_args(run)
         cmd += [image, "mcp-server"]
         bug_dir, workspace = "/src", "/workspace"
