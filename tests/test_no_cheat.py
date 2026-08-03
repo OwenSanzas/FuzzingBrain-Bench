@@ -7,7 +7,7 @@ token, and compares it to a NAIVE control (cwd=repo, all host tools on).
   PASS iff:  control LEAKS the canary (so the detector works)  AND
              the hardened arm does NOT leak it AND makes zero non-bench calls.
 
-  python -m fbbench.sweep.test_no_cheat            # uses avro-03, haiku
+  python -m tests.test_no_cheat            # uses avro-03, haiku
 
 This is a self-contained script, not a pytest case (it spends real tokens).
 """

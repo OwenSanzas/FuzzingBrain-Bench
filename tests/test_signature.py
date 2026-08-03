@@ -13,10 +13,10 @@ depends on rather than re-deriving the corpus.
     a clean run has no signature at all
 
 Both the top-level `canon_sig` (the key everything is counted by) and the
-readable `sig_text` are checked: the hash is what dedups, and the text is what a
-human reads when a number looks wrong.
+readable `sig_text` are checked: the joined key is what dedups, and the text is
+the same components spaced out for reading.
 
-  python -m fbbench.grading.test_signature
+  python -m tests.test_signature
 """
 from __future__ import annotations
 
@@ -143,16 +143,13 @@ def main() -> int:
         # The allocator interceptor at #0 is not the bug; the first application
         # frame is. Only TOP_FRAMES of them identify the crash.
         ("oom skips the allocator frame", _text(_OOM),
-         "out-of-memory | str_buf_reserve@rust-demangle.c:1553 | "
-         "str_buf_append@rust-demangle.c:1572"),
+         "out-of-memory | str_buf_reserve | str_buf_append | str_buf_demangle_callback"),
         # __interceptor_memcpy (sanitizer) and LLVMFuzzerTestOneInput (driver)
         # are both dropped.
         ("bof skips interceptor and driver", _text(_BOF),
-         "heap-buffer-overflow | png_handle_iCCP@pngrutil.c:1447 | "
-         "png_read_info@pngread.c:123"),
+         "heap-buffer-overflow | png_handle_iCCP | png_read_info"),
         ("uaf keeps its own type", _text(_UAF),
-         "heap-use-after-free | png_handle_iCCP@pngrutil.c:1447 | "
-         "png_read_info@pngread.c:123"),
+         "heap-use-after-free | png_handle_iCCP | png_read_info"),
         ("a clean run has no signature", signature(_CLEAN), None),
         # A terminating signal with no output at all is a host flake, not a
         # finding. Nothing names it, so nothing counts it.
@@ -248,6 +245,27 @@ def main() -> int:
     agree = _text(_GRADED_REMOTE) == _text(_GRADED_IN_IMAGE)
     ok = ok and agree
     print(f"  [{'PASS' if agree else 'FAIL'}] the text says what the hash counts")
+
+    # The hazard the joined key brings back, and the only reason the key was
+    # ever a hash. "|" is a legal character in a C++ function name, so without
+    # escaping "operator|" + "b" and "operator" + "|b" flatten to one string and
+    # two distinct crashes count as one. These two traces differ ONLY in where
+    # the pipe sits.
+    def _ops(first: str, second: str) -> dict:
+        return {"exit_code": 1, "signal": "ABRT",
+                "stderr": f"""==7==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60d
+    #1 0x51 in {first} /src/lib/ops.cc:10:5
+    #2 0x52 in {second} /src/lib/ops.cc:20:7
+SUMMARY: AddressSanitizer: heap-buffer-overflow /src/lib/ops.cc:10:5""",
+                "stdout": ""}
+
+    a, b = signature(_ops("Cmp::operator|", "run")), signature(_ops("Cmp::operator", "|run"))
+    distinct = a.canon_sig != b.canon_sig
+    ok = ok and distinct
+    print(f"  [{'PASS' if distinct else 'FAIL'}] a pipe inside a name does not "
+          f"collide with the separator")
+    if not distinct:
+        print(f"         both signed as: {a.canon_sig!r}")
 
     print("signature:", "ALL PASS" if ok else "FAILURES")
     return 0 if ok else 1

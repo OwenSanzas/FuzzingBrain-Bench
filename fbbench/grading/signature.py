@@ -8,10 +8,11 @@ between runs of the SAME fault (heap addresses, pids, allocation sizes, timings)
 is stripped, while everything that locates the fault — class, function, file,
 line — is kept.
 
-    canon_sig = sha256([class, [func, file, line], [func, file, line]])
+    canon_sig = "class|func|func|func"
 
-where `file` is the basename only — see `_norm_file` for why the directory is
-not part of a crash's identity.
+over the top three application frames. A frame is named by its function; an
+unsymbolized frame keeps the module offset that stands in for one, with the
+directory dropped — see `_norm_file` and `_key_part`.
 
 The rules below are not guesses: each one was derived by running this module's
 prototype over all 68 crash logs in the answers repo, and each failure it fixes
@@ -36,16 +37,15 @@ importable with no package around it.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 
-# How many application frames identify a crash site. Two — the faulting function
-# and its immediate caller — is the smallest value that still tells two paths
-# into the same defect apart, which is deliberate: reaching one bug through a
-# different call path counts as a separate find. One frame would merge them.
-TOP_FRAMES = 2
+# How many application frames identify a crash site. Three — the faulting
+# function and the two frames that called it — tells two paths into the same
+# defect apart, which is deliberate: reaching one bug through a different call
+# path counts as a separate find. One frame would merge them.
+TOP_FRAMES = 3
 
 # How many frames to KEEP in the stored `frames` column. Storing more than the
 # signature consumes is what makes TOP_FRAMES revisable later: bumping it to 3 or
@@ -58,13 +58,32 @@ KEEP_FRAMES = 4
 #   3: function names drop parameter lists, template arguments and Rust
 #      instantiation hashes (_norm_func); a cyclic trace is ordered like stack
 #      exhaustion whatever its class (_frame_keys).
-SIG_VERSION = 3
+#   4: the identity is the READABLE joined form again — "class|f1|f2|f3" over
+#      three function names — instead of a sha256 over (func, file, line)
+#      triples. Signatures from 3 and 4 are not comparable: the key changed
+#      shape, not just content.
+SIG_VERSION = 4
 
-# Signature text is display-only — the sha256 is the key — so it can be cut. C++
-# templates demangle to hundreds of characters and would otherwise dominate.
+# Signature text is display-only, so it can be cut. C++ templates demangle to
+# hundreds of characters and would otherwise dominate. The KEY is never cut —
+# truncating an identity is how two different crashes become one.
 SIG_TEXT_MAX = 500
 
 _NO_FRAMES = "<no-frames>"
+
+# The identity separator, and the escape that makes it unambiguous.
+#
+# A joined string is only a valid key if the separator cannot occur inside a
+# component, and "|" can: `operator|` is a legal C++ function name, and
+# demangled operator overloads reach these traces routinely. Unescaped,
+# "a|b" + "c" and "a" + "b|c" are the same string, so two distinct crashes
+# would share one identity and the run would be credited with one find instead
+# of two. Escaping the backslash first keeps the mapping reversible.
+SIG_SEP = "|"
+
+
+def _escape(part: str) -> str:
+    return part.replace("\\", "\\\\").replace(SIG_SEP, "\\" + SIG_SEP)
 
 
 # --------------------------------------------------------------------------
@@ -409,6 +428,31 @@ def _norm_file(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
+# A frame whose "file" is a module plus an offset rather than a source path.
+_MODULE_OFFSET = re.compile(r"\+0x[0-9a-fA-F]+$")
+
+
+def _key_part(frame: dict) -> str:
+    """The one string that identifies a frame in the joined signature.
+
+    A function name, normally — that is the readable form, and the form that
+    survives the rebuilds this benchmark does constantly.
+
+    An UNSYMBOLIZED frame is the exception, and it has to be. It reads
+    `main (/path/harness+0xacb92)`: the name is whatever public symbol the
+    linker left behind, so every fault in the binary shares it, and the offset
+    is the only thing saying WHERE. Reducing such a frame to its name alone
+    merges every crash in the module into one signature — the exact
+    class-counting collapse KEEP_FRAMES exists to prevent, arriving through the
+    other door. The offset stays; _norm_file has already dropped the directory,
+    so the same fault still signs identically whether it was graded in a temp
+    dir or inside an image.
+    """
+    fn = _norm_func(frame["func"])
+    fl = _norm_file(frame["file"])
+    return f"{fn}@{fl}" if _MODULE_OFFSET.search(fl) else fn
+
+
 def _frame_keys(frames: list[dict], klass: str,
                 cyclic: bool = False) -> list[tuple[str, str, int | None]]:
     """The (func, file, line) triples the signature is built from.
@@ -432,7 +476,22 @@ def _frame_keys(frames: list[dict], klass: str,
     where in the cycle the stack ran out. The class test stays for the traces
     that are named honestly.
     """
-    keys = [(_norm_func(f["func"]), _norm_file(f["file"]), f["line"]) for f in frames]
+    # Function names only. The identity is the readable joined form, and a name
+    # is what stays stable across the rebuilds this benchmark does constantly:
+    # bumping a toolchain moves every line number in a file without moving a
+    # single defect. harfbuzz-01 demonstrated exactly that — the same crash,
+    # from the same PoC, signed differently under rustc 1.88 and 1.97 because
+    # `slice/mod.rs` had shifted from line 3746 to 4325.
+    #
+    # The cost is real and is the trade this format makes: two faults at
+    # different lines OF THE SAME FUNCTION now share an identity and count once.
+    # `Signature.frames` keeps file and line unreduced, so a finer key can be
+    # re-derived from stored rows without re-grading.
+    keys = [(_key_part(f),) for f in frames]
+    # Collapse repeats the name-only key creates. Dropping file and line merges
+    # frames that used to differ — a recursive helper called from two lines of
+    # itself — and without this they fill TOP_FRAMES with one name.
+    keys = list(dict.fromkeys(keys))
     if cyclic:
         # Identify the cycle by the frames that REPEAT. Sorting the top-of-stack
         # window is not enough on its own: which frames are in the window is
@@ -460,7 +519,7 @@ def _frame_keys(frames: list[dict], klass: str,
 class Signature:
     """One crash's identity plus the evidence it was derived from."""
 
-    canon_sig: str                       # sha256 hex — the key
+    canon_sig: str                       # the joined identity — the key
     sig_text: str                        # the same thing, readable, truncated
     klass: str                           # normalized fault class
     frames: list[dict] = field(default_factory=list)  # up to KEEP_FRAMES, with lines
@@ -490,25 +549,17 @@ def signature(harness_output: dict) -> Signature | None:
     cyclic = _is_cyclic(all_frames)
     keys = _frame_keys(all_frames if cyclic else frames, klass, cyclic=cyclic)
 
-    # Hash a canonical JSON array rather than a joined string. Separators can
-    # occur inside the components themselves — "operator|" is a legal C++
-    # function name — so "a|b" + "c" and "a" + "b|c" would otherwise collide.
-    payload = json.dumps([klass] + [list(k) for k in keys],
-                         ensure_ascii=False, separators=(",", ":"))
-    canon = hashlib.sha256(payload.encode()).hexdigest()
+    # The identity IS the joined string — "class|f1|f2|f3" — not a digest over
+    # it. A reader can see which crash a run found without a lookup, which is
+    # the whole point of the format; the escaping above is what makes joining
+    # safe enough to key on.
+    parts = [klass] + [fn for (fn,) in keys] if keys else [klass, _NO_FRAMES]
+    canon = SIG_SEP.join(_escape(p) for p in parts)
 
-    if keys:
-        # Rendered from the SAME keys that were hashed, with no further trimming.
-        # These used to diverge — the text cut the path to a basename and the
-        # hash kept it — which is exactly what let a duplicate read as identical
-        # to a human and still count twice. Anything that shortens a key belongs
-        # in _norm_file, above the hash, so both sides see it.
-        shown = " | ".join(
-            f"{fn}@{fl}" + (f":{ln}" if ln is not None else "")
-            for fn, fl, ln in keys)
-    else:
-        shown = _NO_FRAMES
-    text_repr = f"{klass} | {shown}"[:SIG_TEXT_MAX]
+    # Rendered from the SAME parts that form the key, so the two can never
+    # disagree — a duplicate that reads as identical to a human must also count
+    # as identical. Only spacing and length differ, and only the display is cut.
+    text_repr = " | ".join(parts)[:SIG_TEXT_MAX]
 
     return Signature(canon_sig=canon, sig_text=text_repr, klass=klass, frames=frames)
 

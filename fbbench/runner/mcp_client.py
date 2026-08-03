@@ -128,12 +128,25 @@ class MCPClient:
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
                "-e", "BENCH_GRADE_REVEAL=1"]
-        # Point the in-container grader at a different grade server when the host
-        # sets BENCH_GRADE_URL. A localhost/127.0.0.1 URL means "the host", which
-        # the container reaches via the host-gateway alias, so rewrite it and
-        # publish the alias; other hosts pass through untouched. Without this the
-        # image decides for itself — a self-contained image grades locally, an
-        # older one uses the remote URL baked into it.
+        # Send grades somewhere other than the endpoint the image was baked
+        # with, when the operator names one. mcp-server reads BENCH_GRADE_URL at
+        # run time, so this redirects a published image without rebaking it --
+        # which is what makes a local grading backend possible at all.
+        #
+        # Conditional on purpose. Unset means the argument is not passed and the
+        # image keeps its own value, so an external user, and any run that does
+        # not opt in, is bit-for-bit unaffected. Passing a default here instead
+        # would repeat a failure this repo has already had: a local address
+        # shipped as the default made every published image unable to grade, and
+        # nothing raised -- the requests simply went nowhere.
+        #
+        # A localhost/127.0.0.1 URL is the one value that cannot be passed
+        # through as written: inside the container it means the CONTAINER, so a
+        # backend running on the host is unreachable and the grade silently goes
+        # nowhere -- the same failure as above, arriving by a different route.
+        # Rewriting it to the host-gateway alias, and publishing that alias, is
+        # what makes "point it at my laptop" work. Other hosts pass through
+        # untouched.
         grade_url = os.environ.get("BENCH_GRADE_URL")
         if grade_url:
             for local in ("127.0.0.1", "localhost"):
