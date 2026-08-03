@@ -74,18 +74,26 @@ _FLAKE = {"exit_code": -6, "signal": "ABRT", "stderr": "", "stdout": ""}
 
 
 def _unsym(harness_path: str, offset: str = "0xacb92") -> dict:
-    """One fault with an unsymbolized top-level frame, as seen from `harness_path`.
+    """One fault with an unsymbolized CALLER frame, as seen from `harness_path`.
 
     Where the grader unpacked the oracle is not part of the crash. The backend
     uses a fresh temp dir per run and a self-contained image uses its own baked
     prefix, so the same fault arrives under a different path every time.
+
+    The unsymbolized frame is a library function, not `main`. It used to be
+    `main`, which stopped working the moment the runtime entry points joined
+    _SKIP_FUNC -- and rightly so: `main` is in every stack of every challenge, so
+    a signature that leans on it is not identifying anything. A statically linked
+    target's own functions are what actually arrive unsymbolized, which is the
+    case worth pinning.
     """
     return {
         "exit_code": 1, "signal": "ABRT",
         "stderr": f"""==12==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60d
     #0 0x49 in __interceptor_memcpy compiler-rt/asan/asan_interceptors.cpp:8
     #1 0x51 in cupsUTF8ToCharset /src/cups/cups/transcode.c:245:5
-    #2 0x52 in main ({harness_path}+{offset})
+    #2 0x52 in cupsCharsetToUTF8 ({harness_path}+{offset})
+    #3 0x53 in main ({harness_path}+0x776b0)
 SUMMARY: AddressSanitizer: heap-buffer-overflow /src/cups/cups/transcode.c:245:5""",
         "stdout": "",
     }
@@ -170,8 +178,7 @@ def main() -> int:
     for name, a, b in (
         ("same site, different type stays distinct", _BOF, _UAF),
         ("same fault, different caller stays distinct", _BOF, _BOF_OTHER_PATH),
-        ("different offset in one module stays distinct", _GRADED_REMOTE,
-         _GRADED_OTHER_SITE),
+
     ):
         distinct = signature(a).canon_sig != signature(b).canon_sig
         ok = ok and distinct
@@ -231,6 +238,12 @@ def main() -> int:
 
     for name, a, b in (
         ("one crash, two grading runs", _GRADED_REMOTE, _GRADED_REMOTE_AGAIN),
+        # The granularity the signature settles on is the FUNCTION. Two offsets
+        # inside one function are one crash, deliberately: a signature carries
+        # names only, and offsets move with every rebuild. The cost is real and
+        # is the trade -- two genuinely different faults in one long function
+        # now share an identity.
+        ("two offsets in one function are one crash", _GRADED_REMOTE, _GRADED_OTHER_SITE),
         ("one crash, graded remotely and in-image", _GRADED_REMOTE, _GRADED_IN_IMAGE),
         # ABRT, not stack-overflow: caught by the frames, not by the class name.
         ("one cycle, two blow-up points", _CYCLE_FROM_ARRAY, _CYCLE_FROM_VALUE),

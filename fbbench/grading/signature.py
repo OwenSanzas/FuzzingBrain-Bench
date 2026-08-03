@@ -10,9 +10,10 @@ line — is kept.
 
     canon_sig = "class|func|func|func"
 
-over the top three application frames. A frame is named by its function; an
-unsymbolized frame keeps the module offset that stands in for one, with the
-directory dropped — see `_norm_file` and `_key_part`.
+over the top three application frames. A frame is named by its FUNCTION and
+nothing else — no file, no line, no module offset — so every component of a
+signature is a name that can be searched for. The runtime entry (`main`,
+`_start`) is not an application frame; see `_SKIP_FUNC` and `_key_part`.
 
 The rules below are not guesses: each one was derived by running this module's
 prototype over all 68 crash logs in the answers repo, and each failure it fixes
@@ -189,10 +190,27 @@ _STDLIB_HEADER = re.compile(r"/include/c\+\+/|/bits/", re.IGNORECASE)
 # Sanitizer runtime, allocator interceptors, the libFuzzer driver, and the abort
 # machinery again by name (it is statically linked into some targets, where the
 # path test cannot see it).
+#
+# `main` and `_start` belong here for the same reason LLVMFuzzer and fuzzer:: do:
+# they are the runtime getting to the harness, not the defect. Every crash in
+# every challenge passes through both, so they carry no information -- and left
+# in, they do worse than nothing, because they PAD the signature. A fault with
+# one real frame signed
+#     heap-buffer-overflow|cupsUTF8ToCharset|main@harness+0xacb92|_start@harness+0x776b0
+# where the honest answer is `heap-buffer-overflow|cupsUTF8ToCharset`: two of the
+# three "top frames" were the C runtime, and the offsets made them look like
+# findings. 8 of the 64 golden PoCs signed that way.
+#
+# The other half of the same mistake is a crash whose ONLY frame is the runtime.
+# ghidra-01's harness OOMs in its own malloc at harness.c:19 before it reaches
+# the library, so after the driver frames go there is nothing left; that must
+# read <no-frames>, not `main`, or an OOM in the benchmark's own harness is
+# indistinguishable from one in the target.
 _SKIP_FUNC = re.compile(
     r"^(__interceptor_|__asan|__ubsan|__lsan|__msan|__sanitizer"
     r"|operator new|operator delete|malloc|calloc|realloc|free"
-    r"|LLVMFuzzer|fuzzer::|__libc_|__assert_fail|abort|raise|gsignal|pthread_kill)")
+    r"|LLVMFuzzer|fuzzer::|__libc_|__assert_fail|abort|raise|gsignal|pthread_kill"
+    r"|main$|_start$|__libc_start_main|__libc_start_call_main)")
 _SKIP_FILE = re.compile(r"compiler-rt|/sanitizer|libfuzzer", re.IGNORECASE)
 
 # NOTE: do NOT filter on the oracle directory or on "/asan/". A statically linked
@@ -428,29 +446,30 @@ def _norm_file(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-# A frame whose "file" is a module plus an offset rather than a source path.
-_MODULE_OFFSET = re.compile(r"\+0x[0-9a-fA-F]+$")
-
-
 def _key_part(frame: dict) -> str:
-    """The one string that identifies a frame in the joined signature.
+    """The one string that identifies a frame: its function name, and nothing else.
 
-    A function name, normally — that is the readable form, and the form that
-    survives the rebuilds this benchmark does constantly.
+    No file, no line, no module offset. A signature reads
 
-    An UNSYMBOLIZED frame is the exception, and it has to be. It reads
-    `main (/path/harness+0xacb92)`: the name is whatever public symbol the
-    linker left behind, so every fault in the binary shares it, and the offset
-    is the only thing saying WHERE. Reducing such a frame to its name alone
-    merges every crash in the module into one signature — the exact
-    class-counting collapse KEEP_FRAMES exists to prevent, arriving through the
-    other door. The offset stays; _norm_file has already dropped the directory,
-    so the same fault still signs identically whether it was graded in a temp
-    dir or inside an image.
+        out-of-memory|str_buf_reserve|str_buf_append|str_buf_demangle_callback
+
+    and every component is a name someone can search for. That is the whole
+    contract, and anything appended to a frame breaks it.
+
+    The offset used to be kept for unsymbolized frames, on the reasoning that a
+    frame like `main (/path/harness+0xacb92)` carries no information without it.
+    That reasoning was about `main` specifically -- and `main`, with the rest of
+    the runtime entry, is now dropped as not-a-real-frame. What is left arriving
+    unsymbolized is the target's OWN functions in a statically linked build:
+    `vp9_rc_get_svc_params`, `acc_safe_hwrite`. Those are named, distinct, and
+    perfectly good identifiers on their own.
+
+    The granularity this settles on is the FUNCTION. Two faults at different
+    offsets inside one function are one crash here. That is a deliberate floor,
+    not an oversight: offsets and line numbers move with every rebuild, and this
+    corpus rebuilds constantly.
     """
-    fn = _norm_func(frame["func"])
-    fl = _norm_file(frame["file"])
-    return f"{fn}@{fl}" if _MODULE_OFFSET.search(fl) else fn
+    return _norm_func(frame["func"])
 
 
 def _frame_keys(frames: list[dict], klass: str,
