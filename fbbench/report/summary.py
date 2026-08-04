@@ -118,6 +118,14 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                 cells.append({
                     "bug": bug, "model": model, "sample": sample,
                     "tier": int(sc.get("tier_score", 0)),
+                    # This cell's own count, from its score.json. `uniq_crashes`
+                    # below comes from the oracle's pool and is None when there
+                    # is no oracle to ask — which is exactly the locally-graded
+                    # case, so the two are kept apart rather than merged.
+                    "crashes": int(sc.get("unique_crashes", 0)),
+                    # Whether this cell was graded against the capability ladder
+                    # at all. False for in-image grading, which has no answer key.
+                    "has_ladder": bool(caps),
                     # Distinct crashes this cell produced; None when unknown.
                     "uniq_crashes": cell_crashes["crashes"] if cell_crashes else None,
                     "uniq_unpatched": (cell_crashes["unpatched_upstream"]
@@ -143,11 +151,18 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "max_turns": _agree("max_turns", max_turns),
         "stop_on_solve": _agree("stop_on_solve"),
         "preserve_pocs": _agree("preserve_pocs"),
-        "grading": _agree("grading", "remote-oracle"),
+        # No default: a sweep whose cells disagree, or that recorded nothing,
+        # should say so rather than inherit a claim about how it was graded.
+        "grading": _agree("grading"),
     }
 
     return {
         "exp": exp or exp_dir.name,
+        # Does ANY cell here carry an oracle ladder verdict? A sweep run entirely
+        # against self-contained images does not, and the page uses this to show
+        # what was measured (distinct crashes) instead of a grid of zeroes that
+        # reads as five failed checks per cell.
+        "graded_ladder": any(c.get("has_ladder") for c in cells),
         "models": models,
         "bugs": bugs,
         "samples": samples,

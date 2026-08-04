@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const execTruncate = 2000
+const execTruncate = 128 * 1024 // 128 KB per stream, matching the old read_file cap
 
 // execEnvDeny lists environment variables that must never reach the agent's
 // shell: they would leak the oracle location or the privilege-separation
@@ -21,6 +21,14 @@ var execEnvDeny = map[string]bool{
 	"BENCH_ORACLE_DIR": true,
 	"BENCH_AGENT_UID":  true,
 	"BENCH_AGENT_GID":  true,
+	// Local grading. None of these name the defect, but together they describe
+	// the grader well enough to be worth probing: where its rules live, whether
+	// it is running in reveal mode, and how it is configured. An agent that can
+	// read them learns it is being scored and how — which is exactly what the
+	// sealed verdict exists to withhold.
+	"BENCH_SIG_SCRIPT":   true,
+	"BENCH_GRADE_REVEAL": true,
+	"BENCH_DETECT_LEAKS": true,
 }
 
 // agentEnv returns the process environment with the oracle/privsep vars
@@ -93,13 +101,25 @@ func (s *server) toolExec(args []byte) (any, error) {
 		// must never reach the network — otherwise it could brute-force the
 		// remote oracle or fetch upstream material. This matches probeNetNS().
 		nsArgs := []string{"-r", "-n"}
-		// A private mount namespace (-m) is added ONLY when there is a distinct
-		// oracle dir to tmpfs-mask (the dev/local path). -m must remount root
-		// propagation, which needs privileges a plain container lacks; the
-		// canonical challenge image is answer-free (oracleDir == bugDir) so
-		// there is nothing to mask and -m is skipped — keeping exec() working
-		// inside the container while still denying it network access.
-		if s.oracleDir != "" && s.oracleDir != s.bugDir {
+		// A private mount namespace (-m) tmpfs-masks the oracle dir, and is added
+		// ONLY when there is a distinct oracle dir AND no better way to hide it.
+		//
+		// -m must remount root propagation, which needs privileges a plain
+		// container does not have — so it is a last resort, not the first
+		// choice. Two cases skip it:
+		//
+		//   oracleDir == bugDir   the remote-graded challenge image, which is
+		//                         answer-free; there is nothing to mask.
+		//   dropPrivs             the self-contained image, where the oracle is
+		//                         root-owned 0700 and exec() runs as an
+		//                         unprivileged uid. File permissions already
+		//                         deny it, and they do so without needing a
+		//                         capability the container cannot be given.
+		//
+		// Getting this wrong is not subtle: asking for -m where it cannot work
+		// makes unshare fail and takes exec() down with it, so every command the
+		// agent runs returns "cannot change root filesystem propagation".
+		if !s.dropPrivs && s.oracleDir != "" && s.oracleDir != s.bugDir {
 			nsArgs = []string{"-r", "-m", "-n"}
 			inner = "mount -t tmpfs none " + shSingleQuote(s.oracleDir) +
 				" 2>/dev/null || true; " + inner

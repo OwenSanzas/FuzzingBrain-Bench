@@ -45,6 +45,10 @@ def main() -> int:
     ap.add_argument("--model", default="claude-opus-4-7", help="model id (claude*/gpt*/gemini*)")
     ap.add_argument("--max-turns", type=int, default=100,
                     help="turn budget per episode (default 100)")
+    ap.add_argument("--timeout", type=int, default=1800,
+                    help="wall-clock seconds per episode; the agent is told its "
+                         "remaining time and the episode self-stops at the limit "
+                         "(default 1800)")
     ap.add_argument("--output", default="output", help="output root (legacy nesting <output>/<bug>/<model>/)")
     ap.add_argument("--out-dir", default=None,
                     help="literal output dir; takes precedence over --output")
@@ -72,6 +76,10 @@ def main() -> int:
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
     ap.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
                     help="registry prefix for the canonical challenge images")
+    ap.add_argument("--image-tag", default="latest",
+                    help="tag on the challenge image. 'latest' grades against the "
+                         "remote oracle; 'local-v1' is the self-contained variant "
+                         "that grades inside the image and needs no network")
     ap.add_argument("--list-models", action="store_true",
                     help="print the supported-model catalog and exit")
     args = ap.parse_args()
@@ -90,13 +98,19 @@ def main() -> int:
         print(f"error: bug {args.bug} not found under {repo_root}/bugs", file=sys.stderr)
         return 2
 
-    # The agent runs against the PUBLIC challenge image and grades via the remote
-    # oracle baked into it — the same artifact the world runs. A bug may pin its
-    # own image via the optional top-level `image:` field in bench.yaml (a full
-    # ref, e.g. docker.io/zhicheng/my-bug:latest); otherwise fall back to
-    # <image_prefix><alias> under the canonical namespace.
+    # The agent runs against the PUBLIC challenge image — the same artifact the
+    # world runs. Which one depends on the tag: :latest grades by POSTing to the
+    # remote oracle, :local-v1 grades inside the image with no network at all.
+    # A bug may pin its own image via the optional top-level `image:` field in
+    # bench.yaml (a full ref, e.g. docker.io/zhicheng/my-bug:latest), which
+    # carries its own tag and so ignores --image-tag; otherwise fall back to
+    # <image_prefix><alias>:<image_tag> under the canonical namespace.
+    #
+    # The tag is explicit rather than implied because leaving it off does NOT
+    # mean "whatever is local" — Docker resolves a bare name to :latest, so the
+    # remote-graded image was silently the only reachable one.
     bug_image = read_bench(Path(bug_dir) / "bench.yaml").get("image")
-    image = bug_image or f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}"
+    image = bug_image or f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}:{args.image_tag}"
     out_dir = (Path(args.out_dir) if args.out_dir
                else Path(args.output) / args.bug / args.model)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +139,7 @@ def main() -> int:
         workspace="",
         image=image,
         max_turns=args.max_turns,
+        time_budget_s=args.timeout,
         episode_log=str(out_dir / "episode.jsonl"),
         capability_set=capability_set(bug_dir),
         pocs_dir=str(pocs_dir) if pocs_dir else None,
@@ -147,23 +162,49 @@ def main() -> int:
         "config": {
             "mode": args.mode,
             "max_turns": args.max_turns,
+            "timeout_s": args.timeout,
             "stop_on_solve": bool(args.stop_on_solve),
             "preserve_pocs": bool(args.preserve_pocs),
-            "grading": "remote-oracle",
+            # What actually graded this episode, not what we expected to. It was
+            # hardcoded to "remote-oracle", which was true of every run until the
+            # images could grade themselves and then quietly was not — a run
+            # graded entirely offline still reported that an oracle had judged
+            # it. "not-exercised" means the model never submitted a candidate, so
+            # nothing graded and there is nothing to claim.
+            "grading": result.grading or "not-exercised",
             "image": image,
             "capability_set": sorted(capability_set(bug_dir) or []),
         },
-        "solved": result.solved,
-        "capabilities": result.capabilities,
-        "capabilities_bestof": result.capabilities_bestof,
-        "tier_score": sum(1 for v in result.capabilities.values() if v == "fired"),
-        "tier_score_bestof": sum(1 for v in result.capabilities_bestof.values() if v == "fired"),
+        # Headline metric: the number of DISTINCT crashes the agent found (unique
+        # crash-type + top-frames signatures). The capability ladder below is kept
+        # as a per-oracle diagnostic, not the score.
+        "score": result.unique_crashes,
+        "unique_crashes": result.unique_crashes,
+        "crash_signatures": sorted(result.crash_signatures),
         "terminated_reason": result.terminated_reason,
         "refusal_retries": result.refusal_retries,
         "malformed_retries": result.malformed_retries,
         "turns_used": result.turns_used,
         "duration_s": result.duration_s,
     }
+    # The five-rung ladder and `solved` are the ORACLE's verdict. Local grading
+    # does not compute them — it has no answer key, no coverage build and no
+    # fixed-commit build — so under it every rung sat at "not_fired" and `solved`
+    # at false. Both read as measurements that came back negative when nothing
+    # was ever measured, which is the more misleading of the two mistakes.
+    #
+    # So they are written only when a grader actually produced them. A consumer
+    # that finds no `capabilities` key knows the run has nothing to say about the
+    # ladder, rather than being told it failed every rung.
+    if result.grading != "in-image":
+        score.update({
+            "solved": result.solved,
+            "capabilities": result.capabilities,
+            "capabilities_bestof": result.capabilities_bestof,
+            "tier_score": sum(1 for v in result.capabilities.values() if v == "fired"),
+            "tier_score_bestof": sum(1 for v in result.capabilities_bestof.values()
+                                     if v == "fired"),
+        })
     if result.error:
         score["error"] = result.error
     cost = {"model": result.model,

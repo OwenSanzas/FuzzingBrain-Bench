@@ -87,15 +87,26 @@ def bug_kb(bug: str) -> list[str]:
     return capability_set(bd) if bd else list(DEFAULT_KB)
 
 
+# The subprocess timeout is a BACKSTOP only: the episode owns its wall-clock
+# budget (--timeout) and stops itself gracefully so it can write score.json. We
+# give the subprocess this much extra headroom to finish that writeout + docker
+# teardown before we SIGKILL it out from under a hung run.
+_SUBPROC_BACKSTOP_S = 180
+
+
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
+             timeout: int | None = None,
              seed: int | None = None, batch: str | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
+             image_tag: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
     truth so the single and multi paths forward the SAME per-cell flags."""
     cmd = (runner or RUNNER) + ["--bug", bug, "--model", model,
                                 "--max-turns", str(max_turns), "--out-dir", str(cd)]
+    if timeout is not None:
+        cmd += ["--timeout", str(timeout)]
     if seed is not None:
         cmd += ["--seed", str(seed)]
     if batch:
@@ -107,20 +118,27 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
         cmd += ["--api-key", api_key]
     if image_prefix:
         cmd += ["--image-prefix", image_prefix]
+    if image_tag:
+        cmd += ["--image-tag", image_tag]
     return cmd
 
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
              stop_on_solve: bool = False, api_key: str | None = None,
-             image_prefix: str | None = None, runner: list[str] | None = None,
+             image_prefix: str | None = None, image_tag: str | None = None,
+             runner: list[str] | None = None,
              batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
-    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample, batch=batch,
+    cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
+                   seed=sample, batch=batch,
                    preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                   api_key=api_key, image_prefix=image_prefix, runner=runner)
+                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag,
+                   runner=runner)
     try:
-        subprocess.run(cmd, cwd=REPO, timeout=timeout,
+        # The episode self-stops at `timeout`; SIGKILL only if it overruns the
+        # graceful-writeout backstop (so a solved run isn't lost to the killer).
+        subprocess.run(cmd, cwd=REPO, timeout=timeout + _SUBPROC_BACKSTOP_S,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except subprocess.TimeoutExpired:
         return {"error": "timeout"}
@@ -137,13 +155,27 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
     crash_score = pool.batch_score(uid) if uid else None
     by_model = {m["model"]: m for m in (crash_score or {}).get("models", [])}
 
+    # The five-rung ladder is the ORACLE's verdict. A locally-graded sweep never
+    # computes it, and printing five zero columns would read as "the model failed
+    # every rung" rather than "nothing measured this". So the columns appear only
+    # when some cell actually recorded a ladder.
+    graded_ladder = any(
+        (cell_dir(out, bug, model, seed) / "score.json").is_file()
+        and json.loads((cell_dir(out, bug, model, seed) / "score.json").read_text()
+                       ).get("capabilities")
+        for model in models for bug in bugs for seed in seeds)
+
     print("\n" + "=" * 78)
-    print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
-          f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
+    if graded_ladder:
+        print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
+              f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
+    else:
+        print(f"  {'model':24s} {'uniqCr':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
     print("  " + "-" * 90)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
         solved = refusals = n = 0
+        crashes = 0  # headline: total DISTINCT crashes (best-of-seeds per bug, summed)
         cost = 0.0
         for bug in bugs:
             # Coverage columns are best-of-seeds per rung (did the model ever
@@ -153,6 +185,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             caps = {"reach": False, "crash": False, "differential": False, "class": False, "site": False}
             seen = False
             bug_solved = False
+            bug_crashes = 0  # best (max) distinct-crash count across this bug's seeds
             for seed in seeds:
                 sj = cell_dir(out, bug, model, seed) / "score.json"
                 if not sj.is_file():
@@ -162,6 +195,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 for k in caps:
                     if s.get("capabilities", {}).get(k) == "fired":
                         caps[k] = True
+                bug_crashes = max(bug_crashes, int(s.get("unique_crashes", 0)))
                 bug_solved = bug_solved or _seed_solved(s)
                 if s.get("terminated_reason") == "refusal":
                     refusals += 1
@@ -170,18 +204,29 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             if not seen:
                 continue
             n += 1
+            crashes += bug_crashes
             for k in agg:
                 agg[k] += int(caps[k])
             if bug_solved:
                 solved += 1
         cs = by_model.get(model)
-        uniq = f"{cs['crashes_found']}" if cs else ("-" if crash_score is None else "0")
-        print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
-              f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
-              f"{refusals:>6d} {cost:>8.2f}")
+        uniq = f"{cs['crashes_found']}" if cs else f"{crashes}"
+        if graded_ladder:
+            print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
+                  f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
+                  f"{refusals:>6d} {cost:>8.2f}")
+        else:
+            # `solved` needs the answer key too, so it goes with the ladder; what
+            # is left is how many challenges the model was run against.
+            print(f"  {model:24s} {uniq:>7s} {n:>7d} {refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
     if crash_score is None:
-        print("  (uniqCr unavailable: no batch id recorded, or the oracle could not be reached)")
+        # Only worth saying when the oracle was the ONLY possible source. A
+        # locally-graded sweep counts its own crashes and just printed them, so
+        # announcing they are unavailable directly contradicts the table above.
+        if graded_ladder:
+            print("  (uniqCr from the oracle unavailable: no batch id recorded, or the "
+                  "oracle could not be reached — counts above are the cells' own)")
     else:
         for m in crash_score.get("models", []):
             print(f"  {m['model']}: {m['crashes_found']} distinct crashes over "
@@ -231,6 +276,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                jobs: int = 1, dashboard_pref: bool | None = None,
                preserve_pocs: bool = True, stop_on_solve: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
+               image_tag: str | None = None,
                report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
                model_map: dict[str, str] | None = None) -> int:
@@ -286,7 +332,13 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # One id for the whole matrix, so every grade it produces rolls up to the
     # flags that defined it. A resumed sweep gets a NEW id: it is a different
     # experiment in wall-clock terms even when the cells are the same.
-    batch_uid = register_batch(out.name, {
+    #
+    # Skipped entirely for a locally-graded sweep. The id exists so the ORACLE
+    # can group the submissions it receives, and a self-contained image sends it
+    # none — so registering was a network round trip whose only visible effect
+    # was a 404 warning about grouping that was never going to happen.
+    local_grading = (image_tag or "latest") != "latest"
+    batch_uid = "" if local_grading else register_batch(out.name, {
         "models": models, "bugs": len(bugs), "samples": samples,
         "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
         "stop_on_solve": stop_on_solve, "output": str(out),
@@ -315,8 +367,11 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
         print(f"  note: the live dashboard is not available for --arm {arm} yet — "
               f"using line-by-line logs (per-cell transcript + report are still produced).",
               flush=True)
+    # The self-contained images grade in-image and produce no ladder. Passed as
+    # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
-                     max_turns=max_turns, total=len(cells), already_done=done)
+                     max_turns=max_turns, total=len(cells), already_done=done,
+                     expect_ladder=(image_tag or "latest") == "latest")
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME
@@ -343,7 +398,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                            api_key=api_key, image_prefix=image_prefix, runner=runner,
+                            api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner,
                             batch=batch_uid)
         except Exception as e:  # noqa: BLE001
             import traceback
@@ -368,7 +423,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
             print(f"  [{i}/{len(cells)}] start {model} / {bug} / sample-{sample}", flush=True)
             r = _cell(model, bug, sample)
             if r and "error" not in r:
-                print(f"      -> [{bug}] {r.get('tier_score','?')}/{_denom(r)}  "
+                print(f"      -> [{bug}] {r.get('unique_crashes','?')} crashes  "
                       f"{r.get('terminated_reason','')}  ${r.get('total_usd') or 0.0:.4f}",
                       flush=True)
             else:
@@ -388,10 +443,11 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 tag = f"[{i}/{len(cells)}] {model} / {bug} / sample-{sample}"
                 if use_dash:
                     STATUS.cell_start(model, bug, sample, kb)
-                    cmd = cell_cmd(model, bug, cd, max_turns, seed=sample, batch=batch_uid,
+                    cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
+                                   seed=sample, batch=batch_uid,
                                    preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
-                                   api_key=api_key, image_prefix=image_prefix, runner=runner)
+                                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
                     STATUS.cell_finish(model, bug, sample, r)
@@ -399,7 +455,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                     print(f"  {tag} ...", flush=True)
                     r = _cell(model, bug, sample)
                     if r and "error" not in r:
-                        print(f"      -> {r.get('tier_score','?')}/{_denom(r)}  {r.get('terminated_reason','')}  "
+                        print(f"      -> {r.get('unique_crashes','?')} crashes  {r.get('terminated_reason','')}  "
                               f"${r.get('total_usd') or 0.0:.4f}", flush=True)
                     else:
                         print(f"      -> FAILED: {r.get('error') if r else 'unknown'}", flush=True)

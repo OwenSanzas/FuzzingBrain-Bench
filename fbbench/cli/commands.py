@@ -277,6 +277,7 @@ def cmd_run(args) -> int:
         stop_on_solve=getattr(args, "stop_on_solve", True),
         api_key=api_key,
         image_prefix=getattr(args, "image_prefix", None),
+        image_tag=getattr(args, "image_tag", None),
         report_only=getattr(args, "report_only", False),
         runner=[runner_py, "-m", "fbbench.runner"],
         arm=arm, auth=auth, model_map=model_map,

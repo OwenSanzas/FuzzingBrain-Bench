@@ -28,7 +28,7 @@ _OUT = Path(__file__).resolve().parents[1] / "docs" / "PROMPTS.md"
 _DEFAULT_IMAGE = os.environ.get(
     "FBBENCH_IMAGE_PREFIX", "docker.io/osanzas/fbbench-challenge-") + "avro-03"
 
-# Tool return shapes, EXTRACTED from real tool calls (the 6 tools are fixed).
+# Tool return shapes, EXTRACTED from real tool calls (the 3 tools are fixed).
 # The MCP tool-call protocol carries no output schema to the model, and our
 # server declares none, so there is nothing to pull live for returns — we record
 # the observed shape here for the doc. Re-extract with a real run if a tool's
@@ -40,9 +40,6 @@ _TOOL_RETURNS = {
               "workspace_path", "bug_dir", "notes"],
     "exec": ["stdout", "stderr", "exit_code", "duration_ms",
              "truncated{stdout, stderr}"],
-    "list_directory": ["path", "entries[{name, type, size}]", "total_entries", "truncated"],
-    "read_file": ["content (cat -n)", "total_lines", "lines_shown", "truncated", "next_offset"],
-    "write_file": ["bytes_written"],
     "run_poc_on_harness": ["harness_output{stdout, stderr, exit_code, signal}",
                            "duration_ms"],
 }

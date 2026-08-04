@@ -19,6 +19,7 @@ from fbbench.prompts import (
 from dataclasses import replace
 from fbbench.grading.bench_yaml import DEFAULT_KB, harness_sanitizer
 from fbbench.grading.grader import solved as oracle_solved
+from fbbench.grading.signature import signature as crash_signature
 from fbbench.models.catalog import context_window
 from fbbench.runner.backends.base import Backend, Completion, ToolResult
 from fbbench.runner.mcp_client import MCPClient, MCPToolError
@@ -83,6 +84,10 @@ _COMPACT_KEEP_RECENT_TURNS = 4  # most-recent tool-result turns kept in full
 _COMPACT_LARGE_CHARS = 1500     # only elide a tool result whose content exceeds this
 _ELIDED_PREFIX = "[elided:"     # marker so compaction is idempotent
 _PINNED_TOOLS = {"setup"}       # small + critical results: never elide
+
+# Budget note cadence: show the turn/time budget every N turns (plus the final
+# turn and when time is low), not every turn — keeps per-turn context lean.
+_BUDGET_EVERY = 30
 
 
 def _compact_history(messages: list[dict], *, keep_recent_turns: int,
@@ -198,6 +203,17 @@ class EpisodeResult:
     # The authoritative solve: some SINGLE candidate reproduced the full target
     # defect (oracle target_bug_found). NOT a sticky union across candidates.
     solved: bool = False
+    # Distinct crashes found this episode: the set of unique crash signatures
+    # (crash-type + top application frames). unique_crashes = len(crash_signatures)
+    # is the headline score; the capability ladder above is diagnostic only.
+    crash_signatures: set[str] = field(default_factory=set)
+    unique_crashes: int = 0
+    # Which grader actually answered, observed rather than assumed: the image
+    # decides, from whether a harness is baked into it, and the runner only finds
+    # out by grading something. Empty until a candidate is graded — a run where
+    # the model never submitted anything has no answer to give, and reporting a
+    # guess there is how a config field stops being evidence.
+    grading: str = ""
     turns_used: int = 0
     duration_s: float = 0.0
     input_tokens: int = 0
@@ -209,6 +225,29 @@ class EpisodeResult:
     malformed_retries: int = 0
     last_grade: dict | None = None
     error: str | None = None
+
+
+def _crash_identity(out: dict) -> str:
+    """Which crash this graded candidate produced, as a key for the run's set.
+
+    Three sources, best first, because a run may be graded three different ways
+    and the number has to mean the same thing in all of them:
+
+      1. `crash_signature` — a self-contained image graded this locally and
+         already named the crash with the shipped rules. Use its answer; naming
+         it again here could only disagree with it.
+      2. the harness output — an image that grades remotely returns the run's
+         output but no signature, so name it with the SAME rules the image and
+         the backend use. One implementation, three callers.
+      3. a constant — the grader says a crash fired but nothing in the output
+         names it. Every such crash then shares one identity, which UNDERcounts.
+         That is the right way to be wrong: a run is never credited with a
+         distinct find we cannot actually distinguish.
+    """
+    if out.get("crash_signature"):
+        return str(out["crash_signature"])
+    sig = crash_signature(out.get("harness_output") or {})
+    return sig.canon_sig if sig else "crash|<unnamed>"
 
 
 def neutral_tools(mcp: MCPClient) -> list[dict]:
@@ -247,6 +286,7 @@ def run_episode(
     workspace: str,
     image: str,
     max_turns: int = 300,
+    time_budget_s: float | None = None,
     episode_log: str | None = None,
     oracle_dir: str | None = None,
     capability_set: list[str] | None = None,
@@ -291,6 +331,9 @@ def run_episode(
     tlog_fp = (open(os.path.join(os.path.dirname(episode_log), "transcript.jsonl"), "w")
                if episode_log else None)
     start = time.time()
+    # Wall-clock deadline the episode enforces on itself so it can write score.json
+    # before the orchestrator's backstop SIGKILL. None => turn-bounded only.
+    deadline = (start + time_budget_s) if time_budget_s else None
 
     def log(record: dict) -> None:
         if log_fp:
@@ -515,18 +558,34 @@ def run_episode(
                     # target_found is otherwise read for SCORING, never surfaced.
                     if target_found:
                         solved_hit = True
-                    if (bestof_now or caps_now).get("crash") == "fired":
+                    # The in-image grader says so itself; anything else came off
+                    # the wire. Recorded on every grade rather than only the
+                    # first, so a run that somehow changed graders mid-episode
+                    # reports the last one that actually answered instead of a
+                    # stale first impression.
+                    result.grading = ("in-image" if out.get("grading") == "local"
+                                      else "remote-oracle")
+                    if out.get("crashed") or (bestof_now or caps_now).get("crash") == "fired":
                         crashed_hit = True
+                        sig = _crash_identity(out)
+                        if sig not in result.crash_signatures:
+                            result.crash_signatures.add(sig)
+                            result.unique_crashes = len(result.crash_signatures)
+                            log({"event": "unique_crash", "turn": turn,
+                                 "signature": sig, "unique_crashes": result.unique_crashes})
+                            tlog({"event": "unique_crash", "turn": turn,
+                                  "signature": sig, "unique_crashes": result.unique_crashes})
 
                     # The runner runs the image with BENCH_GRADE_REVEAL=1, so the
                     # image's own seal is bypassed and `out` holds the full
                     # verdict. This rebuilds the seal for the model, and is the
                     # one that matters in a real run -- the image's version only
                     # ever applies to an external user driving the image directly.
-                    # Keep it an allow-list, and check it against the one in
-                    # tools/mcp-server/gradeserver.go whenever either moves: a
-                    # field added there and not here is invisible to every
-                    # benchmark run. The two are not identical on purpose --
+                    # Keep it an allow-list, and check it against the ones in
+                    # tools/mcp-server/gradeserver.go (remote) and gradelocal.go
+                    # (in-image) whenever any of them moves: a field added there
+                    # and not here is invisible to every benchmark run. The
+                    # three are not identical on purpose --
                     # duration_ms is forwarded there and withheld here, because
                     # the model is not meant to tune against grading latency.
                     sealed = {"harness_output": out.get("harness_output", {})}
@@ -543,20 +602,34 @@ def run_episode(
                 tlog({"event": "tool_result", "turn": turn, "tool": tc.name,
                       "id": tc.id, "input": tc.input or {}, "is_error": is_error,
                       "result": _payload_obj(payload)})
-            # Budget awareness (aligns with ExploitBench): every turn tells the
-            # model where it is; from 75% of the budget on, add a wrap-up nudge.
+            # Budget awareness: show the turn + wall-clock budget only at intervals
+            # (every _BUDGET_EVERY turns, the final turn, or when time is low) so it
+            # doesn't clutter every turn. The crash "keep hunting" nudge is separate
+            # and fires on ANY crash turn.
             done_t = turn + 1
             remaining = max_turns - done_t
-            note = budget_note(done_t, max_turns, remaining)
-            # A crash this turn (that did not end the episode): prepend the breadth
-            # "keep hunting for more distinct crashes" nudge. Positive + leak-free —
-            # it never reveals whether the crash was the hidden target.
+            now = time.time()
+            elapsed = now - start
+            rem_s = (deadline - now) if deadline is not None else None
+            time_low = bool(time_budget_s) and rem_s is not None and rem_s <= 0.25 * time_budget_s
+            show_budget = (done_t % _BUDGET_EVERY == 0) or (done_t == max_turns) or time_low
+            note_parts: list[str] = []
+            # A crash this turn (that did not end the episode): the breadth "keep
+            # hunting for more distinct crashes" nudge. Positive + leak-free — it
+            # never reveals whether the crash was the hidden target.
             if crashed_hit:
-                note = KEEP_HUNTING_NUDGE + "\n\n" + note
-            messages.append({"role": "tool", "results": results, "note": note})
-            # Record the budget note in the transcript so the run is auditable
-            # (it's injected into the model's context but not in tool_result).
-            tlog({"event": "budget_note", "turn": turn, "note": note})
+                note_parts.append(KEEP_HUNTING_NUDGE)
+            if show_budget:
+                note_parts.append(budget_note(done_t, max_turns, remaining,
+                                              elapsed_s=elapsed, remaining_s=rem_s,
+                                              time_budget_s=time_budget_s))
+            tool_msg: dict = {"role": "tool", "results": results}
+            if note_parts:
+                tool_msg["note"] = "\n\n".join(note_parts)
+                # Record the note in the transcript so the run is auditable (it's
+                # injected into the model's context but not in tool_result).
+                tlog({"event": "budget_note", "turn": turn, "note": tool_msg["note"]})
+            messages.append(tool_msg)
             # (Context compaction now runs PRE-call in complete_once, so a turn's
             # freshly-appended tool results can't overflow the next call before we
             # get a chance to compact. Nothing to do here.)
@@ -569,6 +642,16 @@ def run_episode(
                 result.terminated_reason = "solved"
                 log({"event": "solved", "turn": turn})
                 tlog({"event": "solved", "turn": turn})
+                break
+            # Wall-clock budget: stop gracefully (between turns) so the finally
+            # block still writes score.json — the orchestrator SIGKILL is only a
+            # backstop past this deadline + margin.
+            if deadline is not None and time.time() >= deadline:
+                result.terminated_reason = "time_budget"
+                log({"event": "time_budget", "turn": turn,
+                     "elapsed_s": round(time.time() - start, 1)})
+                tlog({"event": "time_budget", "turn": turn,
+                      "elapsed_s": round(time.time() - start, 1)})
                 break
         else:
             result.terminated_reason = "max_turns"
@@ -588,11 +671,15 @@ def run_episode(
         result.duration_s = time.time() - start
         log({"event": "end", "terminated_reason": result.terminated_reason,
              "capabilities": result.capabilities, "solved": result.solved,
+             "unique_crashes": result.unique_crashes,
+             "crash_signatures": sorted(result.crash_signatures),
              "turns_used": result.turns_used,
              "duration_s": result.duration_s,
              "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
         tlog({"event": "end", "terminated_reason": result.terminated_reason,
               "capabilities": result.capabilities, "solved": result.solved,
+              "unique_crashes": result.unique_crashes,
+              "crash_signatures": sorted(result.crash_signatures),
               "turns_used": result.turns_used,
               "duration_s": result.duration_s,
               "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})

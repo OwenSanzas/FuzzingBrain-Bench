@@ -84,6 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="provider API key; default reads ./.env")
     sp_run.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
                         help="registry prefix for the canonical challenge images")
+    sp_run.add_argument("--image-tag", default="latest",
+                        help="tag on the challenge image: 'latest' grades against the "
+                             "remote oracle, 'local-v1' grades inside the image with "
+                             "no network")
     sp_run.set_defaults(fn=commands.cmd_run)
 
     sp_traj = sub.add_parser("traj",
