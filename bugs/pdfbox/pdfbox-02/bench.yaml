@@ -5,6 +5,5 @@ language: jvm
 harness:
   sanitizer: jazzer
   engine: jazzer
-  invocation: ["@@"]
-
-capability_set: [reach, crash, differential, class, site]
+  invocation:
+  - '@@'
