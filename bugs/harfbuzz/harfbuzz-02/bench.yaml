@@ -1,0 +1,10 @@
+bug_id: harfbuzz-02
+project: harfbuzz
+is_oss_fuzz: true
+language: cpp
+harness:
+  sanitizer: asan
+  engine: libfuzzer
+  invocation:
+  - -rss_limit_mb=4096
+  - '@@'

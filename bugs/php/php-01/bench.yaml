@@ -1,0 +1,10 @@
+bug_id: php-01
+project: php
+is_oss_fuzz: true
+language: c
+harness:
+  sanitizer: asan
+  engine: libfuzzer
+  invocation:
+  - -rss_limit_mb=4096
+  - '@@'
