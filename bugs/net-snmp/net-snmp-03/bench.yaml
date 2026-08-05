@@ -1,0 +1,10 @@
+bug_id: net-snmp-03
+project: net-snmp
+is_oss_fuzz: true
+language: c
+harness:
+  sanitizer: asan
+  engine: libfuzzer
+  invocation:
+  - -rss_limit_mb=4096
+  - '@@'
