@@ -187,7 +187,8 @@ def cmd_run(args) -> int:
 
     A single run is just a 1-cell matrix; N bugs/models/samples is a sweep. Both
     go through the SAME engine (orchestrator.run_matrix). Always pulls the public
-    challenge image and grades via the remote oracle (no local mode).
+    challenge image; --image-tag decides how it is graded, and the default
+    (local-v1) grades inside that image with no network at all.
     """
     from fbbench.sweep.orchestrator import run_matrix, resolve_models, resolve_bugs
 

@@ -6,13 +6,16 @@
 Each challenge gives the agent only the **fuzz harness** (the target) and the
 project source at the vulnerable revision — no patch, no fix commit, no target
 line. The agent must discover an input that re-triggers a fault under the
-sanitizer. Every grade is a **deterministic oracle** (no LLM-as-judge): the
-candidate input runs through the official sanitizer-instrumented harness on a
-private grading service, which returns only a verdict on the capability ladder.
+sanitizer. Every grade is **deterministic** (no LLM-as-judge): the candidate
+input runs through the official sanitizer-instrumented harness, and there are two
+ways to judge the result — the default grades **in-image and offline**, counting
+the distinct crashes the agent triggered; `--image-tag latest` instead sends each
+candidate to the **remote oracle**, which holds the answer key and returns a
+verdict on the capability ladder.
 
 | Challenges | Projects | Languages | Grader |
 |---|---|---|---|
-| **68** end-to-end | **40** | C · C++ · Java | deterministic remote oracle |
+| **68** end-to-end | **40** | C · C++ · Java | deterministic — in-image (default) or remote oracle |
 
 Nothing in the images or this repository reveals what a bug is — challenges are
 named by neutral alias (`<project>-NN`, e.g. `avro-03`), and the answer key
@@ -51,8 +54,11 @@ fb-bench models                               # supported models + which keys ar
 > `pip install --break-system-packages -e .` (not recommended).
 
 `fb-bench run` pulls the public challenge image, drives the agent loop on the
-host (calling your model API), and grades candidates against the remote oracle.
-Only Docker + your model key are required — no build, no answer key.
+host (calling your model API), and grades every candidate **inside that image** —
+no network, nothing to reach. Only Docker + your model key are required, and a
+run scores the **distinct crashes** the agent found. To grade against the remote
+oracle instead (five-rung capability ladder + an authoritative `solved` verdict),
+add `--image-tag latest`.
 
 > The default `--arm api` needs nothing beyond the above. The `--arm codex` and
 > `--arm claudecode` backends need extra **vendor CLIs — optional**, installed
@@ -176,7 +182,10 @@ the sealed public images.
 
 ## The capability ladder
 
-A candidate input is graded on five nested rungs, weakest to strongest:
+Under `--image-tag latest` (remote grading) a candidate input is graded on five
+nested rungs, weakest to strongest. The rungs are an **answer-key** verdict, so
+the default in-image grading does not compute them — it reports distinct crashes
+instead, and its reports show no ladder rather than five unfired rungs:
 
 | Rung | Fires when |
 |---|---|
@@ -199,8 +208,10 @@ fb-bench run <bugs> \
     --samples 3 \             # repeat each (model, bug) N times
     --output my-experiment \  # results under output/my-experiment/ (name or path)
     --no-preserve-pocs \      # graded blobs are KEPT by default; pass this to drop them
-    --stop-on-solve           # end at the first solve; off by default, so an episode
+    --stop-on-solve \         # end at the first solve; off by default, so an episode
                               # keeps hunting for more distinct crashes
+    --image-tag latest        # grade against the remote oracle (capability ladder)
+                              # instead of the default offline in-image grading
 ```
 
 Grade a hand-crafted or external (AFL++ / libFuzzer / honggfuzz) PoC without any
@@ -216,17 +227,21 @@ fb-bench grade <alias> my-input.bin        # -v for the evidence
 
 Every challenge is a public, **answer-free** Docker image. The agent talks to it
 over an MCP server (`setup` / `read_file` / `list_directory` / `write_file` /
-`exec` / `grade`); `grade()` ships the candidate input to a remote oracle that
-holds the answer key and returns only the verdict.
+`exec` / `grade`); `grade()` runs the candidate through the sanitizer harness and
+returns only the verdict — never the answer key, in either grading mode.
 
 ```
-docker.io/osanzas/fbbench-challenge-<alias>:latest     # 68 public images
+docker.io/osanzas/fbbench-challenge-<alias>:local-v1   # self-contained, graded in-image (default)
+docker.io/osanzas/fbbench-challenge-<alias>:latest     # graded by the remote oracle
 ```
 
-Grading is a network call to the remote oracle (the answer key never ships with
-an image); the mcp-server that runs inside each image is pre-built. The seal
-architecture and the answer-free verifier live in [`tools/sealed/`](tools/sealed/)
-— anyone can audit that no answer key ships with an image:
+The two tags differ only in who judges. `:local-v1` carries its own harness build
+and grades in-container, so a run needs no network at all and scores distinct
+crashes. `:latest` makes `grade()` a network call to the remote oracle, which
+holds the answer key and returns the capability ladder. Neither image ships an
+answer key, and the mcp-server inside both is pre-built. The seal architecture and
+the answer-free verifier live in [`tools/sealed/`](tools/sealed/) — anyone can
+audit that no answer key ships with an image:
 
 ```bash
 python tools/sealed/verify_sealed.py docker.io/osanzas/fbbench-challenge-avro-03:latest
@@ -242,8 +257,10 @@ tools/sealed/             challenge index + answer-free image verifier
 ```
 
 The answer artifacts (PoC inputs, expected-fault keys, pre-built binaries) and
-the grading-server source are **not** in this repository — grading is a remote
-call and the answer key lives only behind the oracle.
+the grading-server source are **not** in this repository. The answer key lives
+only behind the oracle — which is why the offline default can tell you that an
+input crashed, but only `--image-tag latest` can tell you it crashed the *right*
+way.
 
 ## License
 

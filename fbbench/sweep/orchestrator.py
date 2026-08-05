@@ -23,6 +23,7 @@ from fbbench.grading import pool
 from fbbench.grading import (
     DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
+from fbbench.images import grades_locally
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
 
@@ -337,7 +338,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # can group the submissions it receives, and a self-contained image sends it
     # none — so registering was a network round trip whose only visible effect
     # was a 404 warning about grouping that was never going to happen.
-    local_grading = (image_tag or "latest") != "latest"
+    local_grading = grades_locally(image_tag)
     batch_uid = "" if local_grading else register_batch(out.name, {
         "models": models, "bugs": len(bugs), "samples": samples,
         "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
@@ -371,7 +372,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
                      max_turns=max_turns, total=len(cells), already_done=done,
-                     expect_ladder=(image_tag or "latest") == "latest")
+                     expect_ladder=not local_grading)
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME

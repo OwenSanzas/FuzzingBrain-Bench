@@ -5,6 +5,7 @@ import argparse
 import sys
 
 from fbbench.cli import commands
+from fbbench.images import DEFAULT_IMAGE_PREFIX, DEFAULT_IMAGE_TAG
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,12 +83,15 @@ def build_parser() -> argparse.ArgumentParser:
                       help="disable the live dashboard; line-by-line logs instead")
     sp_run.add_argument("--api-key", default=None,
                         help="provider API key; default reads ./.env")
-    sp_run.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
+    sp_run.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX,
                         help="registry prefix for the canonical challenge images")
-    sp_run.add_argument("--image-tag", default="latest",
-                        help="tag on the challenge image: 'latest' grades against the "
-                             "remote oracle, 'local-v1' grades inside the image with "
-                             "no network")
+    sp_run.add_argument("--image-tag", default=DEFAULT_IMAGE_TAG,
+                        help=f"tag on the challenge image (default: {DEFAULT_IMAGE_TAG}). "
+                             f"'{DEFAULT_IMAGE_TAG}' is the self-contained image: it "
+                             "grades inside the container with no network and scores "
+                             "DISTINCT CRASHES. 'latest' instead POSTs every candidate "
+                             "to the remote oracle, which returns the five-rung "
+                             "capability ladder and an authoritative solved verdict")
     sp_run.set_defaults(fn=commands.cmd_run)
 
     sp_traj = sub.add_parser("traj",

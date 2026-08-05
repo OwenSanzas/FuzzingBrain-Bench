@@ -5,10 +5,13 @@ After a sweep, :func:`write_summary` injects a params+results blob into
 matrix of every (bug x model) cell, each linking to that episode's own report.
 
 ANSWER SAFETY: the summary reads only each cell's ``score.json`` (the agent's
-achieved tier + which ladder flags fired + cost + terminated reason). It never
-opens ``expected.yaml`` / ``poc`` / a description, and emits no bug class or
-crash location. "solved" is derived purely from the cell's own capabilities
-(every applicable, non-``n/a`` flag fired) — so no answer key is consulted.
+achieved tier + which ladder flags fired + its own crash signatures + cost +
+terminated reason). It never opens ``expected.yaml`` / ``poc`` / a description,
+and emits no bug class or crash location. "solved" is derived purely from the
+cell's own capabilities (every applicable, non-``n/a`` flag fired) — so no
+answer key is consulted. Crash signatures are the AGENT's findings, distilled
+from harness output it had already seen; they say what it hit, never what it was
+supposed to hit.
 """
 from __future__ import annotations
 
@@ -53,6 +56,19 @@ def _solved(sc: dict) -> bool:
     caps = sc.get("capabilities", {})
     applicable = {k: v for k, v in caps.items() if v != "n/a"}
     return bool(applicable) and all(v == "fired" for v in applicable.values())
+
+
+def _tag_of(image: str) -> str:
+    """The tag half of an image ref — 'local-v1' out of '…/avro-03:local-v1'.
+
+    A ref with no tag is not untagged in practice: Docker resolves a bare name to
+    ``:latest``, which is the remote-graded image. Early runs recorded the name
+    that way, so say what they actually ran rather than nothing. The last colon
+    only starts a tag when no ``/`` follows it, because a registry host may carry
+    a port (``localhost:5000/img``).
+    """
+    _, sep, tail = image.rpartition(":")
+    return tail if (sep and "/" not in tail) else "latest (implicit)"
 
 
 def _scan_dimensions(exp_dir: Path) -> tuple[list[str], list[str], list[int]]:
@@ -113,6 +129,10 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                     if isinstance(v, (list, dict)):
                         continue
                     cfg_seen.setdefault(k, set()).add(v)
+                # Derived, and it has to be derived HERE: every bug has its own
+                # image, so the full refs never agree — it is the tag they share.
+                if cfg.get("image"):
+                    cfg_seen.setdefault("image_tag", set()).add(_tag_of(cfg["image"]))
                 report = cd / "report.html"
                 cell_crashes = crashes_by_cell.get((model, bug))
                 cells.append({
@@ -123,6 +143,11 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                     # is no oracle to ask — which is exactly the locally-graded
                     # case, so the two are kept apart rather than merged.
                     "crashes": int(sc.get("unique_crashes", 0)),
+                    # The signatures behind that count (crash type + top frames),
+                    # so the page can dedupe across seeds and show WHAT was hit
+                    # rather than only how many. The agent's own findings — see
+                    # the answer-safety note at the top of this module.
+                    "sigs": sorted(sc.get("crash_signatures") or []),
                     # Whether this cell was graded against the capability ladder
                     # at all. False for in-image grading, which has no answer key.
                     "has_ladder": bool(caps),
@@ -149,11 +174,16 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
     config = {
         "mode": _agree("mode", "blind"),
         "max_turns": _agree("max_turns", max_turns),
+        "timeout_s": _agree("timeout_s"),
         "stop_on_solve": _agree("stop_on_solve"),
         "preserve_pocs": _agree("preserve_pocs"),
         # No default: a sweep whose cells disagree, or that recorded nothing,
         # should say so rather than inherit a claim about how it was graded.
         "grading": _agree("grading"),
+        # The image tag is what CHOSE that grading, so the page can say which
+        # artifact produced these numbers rather than only how they were judged.
+        # A sweep whose bugs pin their own images reads "mixed", which is true.
+        "image_tag": _agree("image_tag"),
     }
 
     return {
