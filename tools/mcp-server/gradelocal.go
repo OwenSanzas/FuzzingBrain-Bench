@@ -202,6 +202,13 @@ func (s *server) gradeLocal(abs string) (any, error) {
 				out["crash_signature"] = sig.CanonSig
 				out["crash_signature_text"] = sig.SigText
 				out["crash_class"] = sig.Class
+				// Revealed with the signature, and only ever to the trusted
+				// runner: the seal in toolGrade is an allow-list of
+				// harness_output + crash_novelty, so this never reaches the
+				// agent. It tells the agent nothing it has not already seen in
+				// its own harness output either -- but it stays behind the
+				// reveal so the payload has exactly one rule, not two.
+				out["crash_frames"] = sig.Frames
 			}
 		}
 	}
@@ -260,6 +267,16 @@ type sigResult struct {
 	CanonSig string `json:"canon_sig"`
 	SigText  string `json:"sig_text"`
 	Class    string `json:"klass"`
+	// Where the crash faulted: {"func","file","line"} per frame, top first, up
+	// to the script's KEEP_FRAMES. NOT part of the identity -- CanonSig is
+	// function names only, because a name survives a rebuild and a line number
+	// does not. Kept because grouping crashes into the DEFECTS they point at
+	// needs the faulting location, and this is the only place it still exists:
+	// the signature is computed from the RAW output, while harness_output below
+	// is tail-truncated, so a deep recursion trace cannot be re-parsed
+	// downstream. Dropping these was silently costing the bug count on exactly
+	// the challenges that over-count most.
+	Frames []map[string]any `json:"frames"`
 }
 
 // defaultSigScript is where build_challenge bakes the vendored copy of the

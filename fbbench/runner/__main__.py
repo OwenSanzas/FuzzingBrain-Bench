@@ -184,6 +184,19 @@ def main() -> int:
         "score": result.unique_crashes,
         "unique_crashes": result.unique_crashes,
         "crash_signatures": sorted(result.crash_signatures),
+        # Where each of those crashes faulted. NOT part of the identity — the
+        # signature is deliberately name-only, because names survive the rebuilds
+        # this corpus does constantly and line numbers do not. It is here because
+        # grouping crashes into the DEFECTS they point at needs the faulting
+        # location, and re-deriving it later from an archived transcript fails
+        # exactly where it matters: the deep traces get truncated on the way.
+        #
+        # This is an OBSERVATION, and the only thing stored. The bug count itself
+        # is an interpretation of it (fbbench.grading.bugs) and is derived where
+        # it is reported — storing it too would freeze one ruleset into every
+        # cell and go stale the moment the rules improve.
+        "crash_frames": {s: result.crash_frames.get(s, [])
+                         for s in sorted(result.crash_signatures)},
         "terminated_reason": result.terminated_reason,
         "refusal_retries": result.refusal_retries,
         "malformed_retries": result.malformed_retries,

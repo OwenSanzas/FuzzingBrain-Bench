@@ -208,6 +208,17 @@ class EpisodeResult:
     # is the headline score; the capability ladder above is diagnostic only.
     crash_signatures: set[str] = field(default_factory=set)
     unique_crashes: int = 0
+    # Where each of those crashes faulted: signature -> the frames behind it
+    # (func + file + line), from the FIRST candidate that produced it.
+    #
+    # signature.py computes these on every graded candidate and the identity
+    # deliberately drops them — a name is what stays stable across rebuilds,
+    # while a line number moves. But the faulting location is what says which
+    # DEFECT a crash points at, so a signature alone cannot be grouped into
+    # bugs later (fbbench.grading.bugs). Keeping the frames costs nothing and is
+    # exactly what KEEP_FRAMES exists for: re-derive a finer key from stored
+    # rows instead of re-grading. Empty for a crash whose output named no frame.
+    crash_frames: dict[str, list[dict]] = field(default_factory=dict)
     # Which grader actually answered, observed rather than assumed: the image
     # decides, from whether a harness is baked into it, and the runner only finds
     # out by grading something. Empty until a candidate is graded — a run where
@@ -248,6 +259,33 @@ def _crash_identity(out: dict) -> str:
         return str(out["crash_signature"])
     sig = crash_signature(out.get("harness_output") or {})
     return sig.canon_sig if sig else "crash|<unnamed>"
+
+
+def _crash_frames(out: dict, sig: str) -> list[dict]:
+    """Where this crash faulted: frames (func/file/line) behind `sig`, or [].
+
+    The identity comes from `_crash_identity` and is authoritative; this only
+    adds the location it discarded. Three sources, matching that function:
+
+      1. the in-image grader, when it passes the frames it already computed
+         (`crash_frames`);
+      2. the harness output, re-run through the SAME rules — which is also the
+         only source under remote grading, since the oracle returns output;
+      3. nothing, for a crash whose output named no frame.
+
+    Source 2 is only trusted when it reproduces `sig`. When it does not, the
+    output reaching us was truncated on the way (the MCP server caps stdout and
+    stderr), so its frames belong to a DIFFERENT, shorter trace than the one
+    that was named — and a bug grouping built on them would merge crashes that
+    never happened. Returning [] there makes the gap visible instead.
+    """
+    frames = out.get("crash_frames")
+    if isinstance(frames, list) and frames:
+        return [f for f in frames if isinstance(f, dict)]
+    derived = crash_signature(out.get("harness_output") or {})
+    if derived is not None and derived.canon_sig == sig:
+        return list(derived.frames)
+    return []
 
 
 def neutral_tools(mcp: MCPClient) -> list[dict]:
@@ -571,6 +609,11 @@ def run_episode(
                         if sig not in result.crash_signatures:
                             result.crash_signatures.add(sig)
                             result.unique_crashes = len(result.crash_signatures)
+                            # First candidate to produce this crash is the one
+                            # whose location is kept: later ones are the same
+                            # crash by definition, so they would only overwrite
+                            # it with an equivalent trace.
+                            result.crash_frames[sig] = _crash_frames(out, sig)
                             log({"event": "unique_crash", "turn": turn,
                                  "signature": sig, "unique_crashes": result.unique_crashes})
                             tlog({"event": "unique_crash", "turn": turn,

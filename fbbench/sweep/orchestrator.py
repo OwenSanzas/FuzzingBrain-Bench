@@ -23,6 +23,7 @@ from fbbench.grading import pool
 from fbbench.grading import (
     DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
+from fbbench.grading.bugs import count as bug_count
 from fbbench.images import grades_locally
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
@@ -171,12 +172,16 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
         print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
               f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
     else:
-        print(f"  {'model':24s} {'uniqCr':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
+        # bugs FIRST: it is the score. paths sits next to it because reaching one
+        # defect several ways is a real skill and the number would otherwise
+        # vanish behind the grouping.
+        print(f"  {'model':24s} {'bugs':>6s} {'paths':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
     print("  " + "-" * 90)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
         solved = refusals = n = 0
-        crashes = 0  # headline: total DISTINCT crashes (best-of-seeds per bug, summed)
+        crashes = 0  # distinct crash PATHS (best-of-seeds per bug, summed)
+        defects = 0  # headline: distinct BUGS those paths point at
         cost = 0.0
         for bug in bugs:
             # Coverage columns are best-of-seeds per rung (did the model ever
@@ -187,6 +192,10 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             seen = False
             bug_solved = False
             bug_crashes = 0  # best (max) distinct-crash count across this bug's seeds
+            # Signature -> frames, unioned over this bug's seeds. Bugs are counted
+            # on the union rather than per seed: two seeds that reached one defect
+            # two ways found one bug, and a max/sum over seeds would not say that.
+            bug_sigmap: dict[str, list] = {}
             for seed in seeds:
                 sj = cell_dir(out, bug, model, seed) / "score.json"
                 if not sj.is_file():
@@ -196,6 +205,9 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 for k in caps:
                     if s.get("capabilities", {}).get(k) == "fired":
                         caps[k] = True
+                seed_frames = s.get("crash_frames") or {}
+                for sig in (s.get("crash_signatures") or []):
+                    bug_sigmap.setdefault(sig, seed_frames.get(sig) or [])
                 bug_crashes = max(bug_crashes, int(s.get("unique_crashes", 0)))
                 bug_solved = bug_solved or _seed_solved(s)
                 if s.get("terminated_reason") == "refusal":
@@ -206,6 +218,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 continue
             n += 1
             crashes += bug_crashes
+            defects += bug_count(bug_sigmap)
             for k in agg:
                 agg[k] += int(caps[k])
             if bug_solved:
@@ -218,8 +231,10 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                   f"{refusals:>6d} {cost:>8.2f}")
         else:
             # `solved` needs the answer key too, so it goes with the ladder; what
-            # is left is how many challenges the model was run against.
-            print(f"  {model:24s} {uniq:>7s} {n:>7d} {refusals:>6d} {cost:>8.2f}")
+            # is left is bugs found, the paths that reached them, and how many
+            # challenges the model was run against.
+            print(f"  {model:24s} {defects:>6d} {uniq:>7s} {n:>7d} "
+                  f"{refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
     if crash_score is None:
         # Only worth saying when the oracle was the ONLY possible source. A

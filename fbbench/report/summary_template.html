@@ -139,14 +139,15 @@ a.rep:hover{text-decoration:underline;}
     <table class="cfg ladder-legend">
       <tbody>
         <tr><td><b>signature</b></td><td>a crash's identity: sanitizer fault type + its top stack frames</td></tr>
-        <tr><td><b>distinct crash</b></td><td>one signature, seen at least once on one challenge</td></tr>
-        <tr><td><b>the score</b></td><td>distinct crashes — the same fault hit twenty times counts once, and repeats across samples of a challenge collapse into one</td></tr>
+        <tr><td><b>crash path</b></td><td>one signature — <i>one way</i> of reaching a fault. Repeats within a challenge collapse into one</td></tr>
+        <tr><td><b>distinct bug</b></td><td>one <i>defect</i>. Several crash paths that fault at the same place are one bug: reaching it four ways is skill, but it is still one bug to fix</td></tr>
       </tbody>
     </table>
-    <div class="sub" style="margin-top:8px"><span class="muted">A crash is a real fault
-    the agent triggered, not necessarily <i>the</i> bug the challenge was built around:
-    an off-target find still counts here. Deciding which are on-target needs the oracle
-    (<code>--image-tag latest</code>).</span></div>
+    <div class="sub" style="margin-top:8px"><span class="muted">Both are reported because
+    they measure different things — how many ways the agent could reach a fault, and how
+    many defects it actually found. A crash is a real fault it triggered, not necessarily
+    <i>the</i> bug the challenge was built around: an off-target find still counts. Deciding
+    which are on-target needs the oracle (<code>--image-tag latest</code>).</span></div>
   </div>
 </div>
 
@@ -218,6 +219,25 @@ const modelCrashes = m => HAS_SIGS
   ? (sigsByModel[m] ? sigsByModel[m].size : 0)
   : cells.filter(c => c.model === m).reduce((a,c) => a + (c.crashes||0), 0);
 
+// --- distinct BUGS -------------------------------------------------------
+// The second measurement, never a replacement for the first. A signature is a
+// crash: one defect reached by three call paths is three signatures, and
+// reaching it three ways is a real skill worth reporting. But a bug-finding
+// benchmark is asking how many DEFECTS were found, so both are shown.
+//
+// Clustered in Python (fbbench.grading.bugs) because it needs the faulting
+// location, which the signature deliberately drops. Counts arrive pre-computed
+// per (challenge, model) pair and per sweep — never summed from cells, since two
+// samples that hit one defect two ways found one bug.
+const PAIRS = D.pairs || {};
+const TOTALS = D.totals || null;
+const pairOf = (bug, model) => PAIRS[bug + " " + model] || null;
+const pairBugs = (bug, model) => { const p = pairOf(bug, model); return p ? p.bugs : null; };
+const totalBugs = TOTALS ? TOTALS.bugs : null;
+// Per model: sum its pairs' bug counts. Each pair is already the union over that
+// pair's samples, so this double-counts nothing within a model.
+const modelBugs = m => D.bugs.reduce((a,b) => a + ((pairOf(b,m)||{}).bugs || 0), 0);
+
 // Unique-crash score from the ORACLE: one point per distinct crash it attributed
 // to this run, capped per challenge so a single crash-rich harness cannot
 // dominate. Only ever present for a remotely-graded sweep — in-image runs send
@@ -242,7 +262,8 @@ document.getElementById("stats").innerHTML =
   (CS ? stat(`${crashPts}`,"unique-crash score","g") : "") +
   (CS ? stat(`${crashFound}<span class="den"> / ${crashOff} off-target</span>`,"distinct crashes") : "") +
   (CS && crashUnpat ? stat(`${crashUnpat}`,"still crash the fix","p") : "") +
-  (!CS ? stat(`${distinct}`,"distinct crashes","g") : "") +
+  (!CS && totalBugs !== null ? stat(`${totalBugs}`,"distinct bugs","g") : "") +
+  (!CS ? stat(`${distinct}`,"distinct crash paths", totalBugs === null ? "g" : "") : "") +
   (!CS ? stat(`${bugsCrashed.size}<span class="den"> / ${D.bugs.length}</span>`,"challenges crashed","a") : "") +
   (errs ? stat(`${errs}`,"errors") : "") +
   stat(`$${(D.total_cost||0).toFixed(2)}`,"total cost") +
@@ -361,7 +382,7 @@ function renderLadder(filter){
   let head = `<tr><th class="bug">bug (${bugs.length})</th><th>D</th>`;
   if (HAS_LADDER) for (const k of LADDER) head += `<th>${LADDER_LABEL[k]}</th>`;
   head += `<th>${SCORE_LABEL}</th>`;
-  if (!HAS_LADDER) head += `<th class="bug">crash signatures</th>`;
+  if (!HAS_LADDER) head += `<th>bugs</th><th class="bug">crash signatures</th>`;
   head += `<th>cost</th><th>report</th></tr>`;
   let rows = "";
   for (const b of bugs){
@@ -378,6 +399,14 @@ function renderLadder(filter){
     const shown = c ? (HAS_LADDER ? val+"/5" : String(val)) : "—";
     rows += `<td class="tier ${tcls}">${shown}${solved?" ★":""}</td>`;
     if (!HAS_LADDER){
+      // Distinct defects behind those paths. "4 → 1" is the interesting cell:
+      // one bug found four ways. Bold only when the two numbers differ, so the
+      // eye lands on the challenges where the distinction did work.
+      const nb = c ? pairBugs(b, m) : null;
+      const differs = nb !== null && nb !== val;
+      rows += `<td class="tier ${nb ? (differs ? "solved" : "") : "t0"}"`
+            + (differs ? ` title="${val} crash path(s) reached ${nb} distinct bug(s)"` : "")
+            + `>${nb === null ? "—" : nb}</td>`;
       const sigs = c ? pairSigs(b, m) : [];
       rows += `<td class="sigs">${sigs.length ? sigs.map(sigHtml).join("")
                                               : '<span class="muted">—</span>'}</td>`;
@@ -399,14 +428,22 @@ function crashClass(n){ return n === 0 ? "t0" : n <= 2 ? "t1" : n <= 4 ? "t3" : 
 function cellHtml(c){
   if (!c) return `<a class="cell none">·</a>`;
   const err = c.reason === "error";
-  const n = HAS_LADDER ? (c.tier||0) : pairCrashes(c.bug, c.model);
+  const paths = pairCrashes(c.bug, c.model);
+  const nb = pairBugs(c.bug, c.model);
+  // In-image mode the cell shows BUGS — the score — with the crash-path count
+  // beside it as "bugs/paths" whenever the two differ, so neither measurement is
+  // hidden and it stays obvious which one is the score.
+  const n = HAS_LADDER ? (c.tier||0) : (nb === null ? paths : nb);
   const cls = err ? "err"
             : HAS_LADDER ? `t${c.tier}` + (c.solved ? " solved" : "")
             : crashClass(n);
-  const label = err ? "err" : `${n}`;
+  const label = err ? "err"
+              : (!HAS_LADDER && nb !== null && paths !== nb)
+                ? `${nb}<span class="mtally">/${paths}</span>` : `${n}`;
   const href = c.report ? ` href="${esc(c.report)}"` : "";
   const what = HAS_LADDER ? `tier ${c.tier}/5${c.solved ? " · solved" : ""}`
-                          : `${n} distinct crash${n === 1 ? "" : "es"}`;
+                          : `${nb === null ? paths : nb} distinct bug(s) `
+                            + `from ${paths} crash path(s)`;
   const sigs = HAS_LADDER ? [] : pairSigs(c.bug, c.model);
   const title = [`${c.bug} · ${c.model} — ${what}`,
                  `${c.reason || ""} · $${(c.cost||0).toFixed(4)}`,
@@ -419,7 +456,8 @@ function renderMatrix(filter){
                                   models.some(mm => mm.toLowerCase().includes(f) && f === mm.toLowerCase()));
   let head = `<tr><th class="bug" style="text-align:left">bug (${bugs.length})</th>`;
   for (const m of models){
-    const t = HAS_LADDER ? `${tally[m].solved} solved` : `${tally[m].crashes} crashes`;
+    const t = HAS_LADDER ? `${tally[m].solved} solved`
+            : `${modelBugs(m)} bugs · ${tally[m].crashes} paths`;
     head += `<th>${esc(m)}<div class="mtally">${t} · $${tally[m].cost.toFixed(1)}</div></th>`;
   }
   head += `</tr>`;
@@ -438,8 +476,8 @@ const RAMP = `<b style="background:#6e7681"></b>0 <b style="background:#d29922">
            + `<b style="background:#58a6ff"></b>3–4 <b style="background:#3fb950"></b>5+`;
 document.getElementById("legend").innerHTML =
   !HAS_LADDER ? (single
-      ? `distinct crashes per challenge — <span class="muted">fault type ‹ top stack frames</span>`
-      : `distinct crashes ${RAMP} <span class="muted">— hover a cell for its signatures</span>`)
+      ? `<span class="muted">crash paths · distinct bugs ·</span> fault type ‹ top stack frames`
+      : `bugs<span class="muted">/paths</span> ${RAMP} <span class="muted">— hover a cell for its signatures</span>`)
   : single
       ? `<span style="color:var(--green)">●</span> fired&nbsp;&nbsp;<span style="color:#6e7681">○</span> not fired&nbsp;&nbsp;<span style="color:#39414b">·</span> n/a&nbsp;&nbsp;<span style="color:var(--green)">★</span> solved`
       : `tier ${RAMP.replace("5+","5")} <span style="margin-left:9px;outline:1.5px solid #3fb950;border-radius:3px;padding:0 4px;">solved</span>`;
@@ -448,8 +486,10 @@ document.getElementById("legend").innerHTML =
 // two different measurements, and only one of them ever consulted an oracle.
 document.getElementById("foot").innerHTML += HAS_LADDER
   ? ` Graded against the remote oracle: tiers and <i>solved</i> are its verdicts.`
-  : ` Graded in-image (offline, no answer key): the score is distinct crashes the`
-    + ` agent triggered — there is no <i>solved</i> verdict and no capability ladder here.`;
+  : ` Graded in-image (offline, no answer key): no <i>solved</i> verdict and no capability`
+    + ` ladder. Two measurements are reported — <b>crash paths</b> (distinct ways a fault was`
+    + ` reached) and <b>distinct bugs</b> (the defects those faults point at, grouped by`
+    + ` faulting location). Bugs are the score; paths are the search skill behind it.`;
 if (!HAS_LADDER)
   document.getElementById("search").placeholder = "Filter by bug, model, or crash signature…";
 const render = single ? renderLadder : renderMatrix;
