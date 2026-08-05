@@ -1,3 +1,6 @@
+
+
+
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -6,7 +9,7 @@ import java.nio.file.Paths;
 public class PocRunner {
     public static void main(String[] args) throws Throwable {
         if (args.length < 1) {
-            System.err.println("Usage: PocRunner <poc.bin>");
+            System.err.println("Usage: PocRunner <harness.bin>");
             System.exit(2);
         }
         byte[] data = Files.readAllBytes(Paths.get(args[0]));
@@ -20,8 +23,8 @@ public class PocRunner {
         try {
             m.invoke(null, (Object) data);
         } catch (InvocationTargetException ite) {
-            // Re-throw the underlying cause so the JVM prints the original
-            // stack trace (otherwise reflection wraps it in InvocationTargetException).
+            
+            
             throw ite.getCause();
         }
     }
