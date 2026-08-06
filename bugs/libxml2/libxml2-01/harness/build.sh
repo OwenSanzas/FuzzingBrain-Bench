@@ -1,81 +1,95 @@
 #!/bin/bash
-# libxml2 ships its own OSS-Fuzz target at fuzz/regexp.c (+ fuzz/fuzz.c helpers)
-# inside the checked-out tree -- no harness source to COPY in. Build the library
-# twice (asan, coverage) via autogen.sh, then link fuzz/regexp.o + fuzz/fuzz.o
-# against the static lib.
+# Drives libxml2's own OSS-Fuzz recipe (fuzz/oss-fuzz-build.sh) inside the
+# real oss-fuzz-base/base-builder image, reproducing the environment that
+# OSS-Fuzz's `compile` script would set up (see
+# infra/base-images/base-builder/compile and compile_libfuzzer upstream)
+# instead of hand-writing compile/link lines.
+#
+# Rebuild trigger: harness/html.c and harness/fuzz.c were edited to turn the
+# pull/push "self-check" mismatches (roundtrip mismatch, OOM/IO bookkeeping
+# in xmlFuzzCheckFailureReport) from a hard abort() into a stderr log, since
+# those aborts fire on historical corpus entries that never touched any real
+# memory-safety bug. The vuln-asan/fixed-asan binaries under binaries/ were
+# built before that edit landed and are stale; touching this file forces
+# both images to be rebuilt from the current (non-aborting) harness sources.
 set -euo pipefail
 cmd="${1:?usage: build.sh build-libs | harness <config>}"
-JOBS=$(nproc)
+
+SRC_ROOT=/src/libxml2
+BUILD_CACHE=/root/_build
+
+# Runs fuzz/oss-fuzz-build.sh for one (SANITIZER, CFLAGS) flavor inside a
+# private copy of the source tree, mimicking base-builder's compile script.
+build_flavor() {
+    local flavor="$1" sanitizer="$2" cflags_override="${3:-}"
+    local tree="/src/libxml2-${flavor}"
+    local work="/tmp/work-${flavor}"
+    local out="/tmp/ossout-${flavor}"
+
+    rm -rf "${tree}" "${work}" "${out}"
+    cp -r "${SRC_ROOT}" "${tree}"
+    mkdir -p "${work}" "${out}"
+
+    local flags="${CFLAGS}"
+    if [ -n "${cflags_override}" ]; then
+        flags="${flags/-O1/${cflags_override}}"
+    fi
+
+    local san_flags_var="SANITIZER_FLAGS_${sanitizer}"
+    local san_flags="${!san_flags_var-}"
+
+    local cov_flags="${COVERAGE_FLAGS}"
+    local cov_flags_var="COVERAGE_FLAGS_${sanitizer}"
+    if [ -n "${!cov_flags_var+x}" ]; then
+        cov_flags="${!cov_flags_var}"
+    fi
+
+    (
+        cd "${tree}"
+        export SRC=/src
+        export WORK="${work}"
+        export OUT="${out}"
+        export SANITIZER="${sanitizer}"
+        export ARCHITECTURE=x86_64
+        export FUZZING_ENGINE=libfuzzer
+        export CC=clang
+        export CXX=clang++
+        export CFLAGS="${flags} ${san_flags} ${cov_flags}"
+        export CXXFLAGS="${CFLAGS} ${CXXFLAGS_EXTRA}"
+        export LIB_FUZZING_ENGINE="-fsanitize=fuzzer"
+        bash fuzz/oss-fuzz-build.sh
+    )
+
+    mkdir -p "${BUILD_CACHE}/${flavor}"
+    cp "${out}/html" "${BUILD_CACHE}/${flavor}/html"
+    rm -rf "${tree}" "${work}" "${out}"
+}
 
 if [ "${cmd}" = "build-libs" ]; then
-    cp -r /src/libxml2 /src/libxml2-asan
-    cp -r /src/libxml2 /src/libxml2-cov
-
-    pushd /src/libxml2-asan >/dev/null
-    CC=clang CXX=clang++ \
-        CFLAGS="-fsanitize=address -g -O1 -fno-omit-frame-pointer" \
-        CXXFLAGS="-fsanitize=address -g -O1 -fno-omit-frame-pointer" \
-        LDFLAGS="-fsanitize=address" \
-        ./autogen.sh --disable-shared --without-debug --without-http \
-            --without-python --with-zlib >/dev/null
-    make -j${JOBS} >/dev/null 2>&1
-    popd >/dev/null
-
-    pushd /src/libxml2-cov >/dev/null
-    CC=clang CXX=clang++ \
-        CFLAGS="-fprofile-instr-generate -fcoverage-mapping -g -O0" \
-        CXXFLAGS="-fprofile-instr-generate -fcoverage-mapping -g -O0" \
-        LDFLAGS="-fprofile-instr-generate -fcoverage-mapping" \
-        ./autogen.sh --disable-shared --without-debug --without-http \
-            --without-python --with-zlib >/dev/null
-    make -j${JOBS} >/dev/null 2>&1
-    popd >/dev/null
-
-    echo "libxml2 built (asan + coverage)"
+    # debug / debug-asan share one -O0 ASan build; release-asan uses the
+    # same default (-O1) flags OSS-Fuzz actually built with; coverage gets
+    # its own SanitizerCoverage/profiling build.
+    build_flavor debug   address  "-O0 -g"
+    build_flavor asan    address  ""
+    build_flavor cov     coverage ""
+    echo "libxml2 html fuzzer built for debug/asan/coverage flavors"
     exit 0
 fi
 
 if [ "${cmd}" = "harness" ]; then
     CONFIG="${2:?harness needs <config>}"
-    OUT=/out/${CONFIG}
-    mkdir -p "${OUT}"
-
     case "${CONFIG}" in
-        debug|debug-asan|release-asan)
-            CFLAGS_H="$([ "${CONFIG}" = "release-asan" ] && echo "-O2 -g" || echo "-g -O0")"
-            BUILD=/src/libxml2-asan
-            SAN="-fsanitize=fuzzer,address"
-            ;;
-        coverage)
-            CFLAGS_H="-g -O0 -fprofile-instr-generate -fcoverage-mapping"
-            BUILD=/src/libxml2-cov
-            SAN="-fsanitize=fuzzer"
-            ;;
+        debug)        FLAVOR=debug; OUT=/out/vuln/debug ;;
+        debug-asan)   FLAVOR=debug; OUT=/out/vuln/debug-asan ;;
+        release-asan) FLAVOR=asan;  OUT=/out/vuln/asan ;;
+        coverage)     FLAVOR=cov;   OUT=/out/vuln/cov ;;
         *) echo "unknown config: ${CONFIG}" >&2; exit 2 ;;
     esac
 
-    clang \
-        ${CFLAGS_H} \
-        ${SAN} \
-        -fmacro-prefix-map=/src/= \
-        -I "${BUILD}/include" -I "${BUILD}" \
-        -c "${BUILD}/fuzz/regexp.c" -o "${OUT}/regexp.o"
-    clang \
-        -g -O1 \
-        -fmacro-prefix-map=/src/= \
-        -I "${BUILD}/include" -I "${BUILD}" \
-        -c "${BUILD}/fuzz/fuzz.c" -o "${OUT}/fuzz.o"
-
-    clang \
-        ${CFLAGS_H} \
-        ${SAN} \
-        "${OUT}/regexp.o" "${OUT}/fuzz.o" \
-        "${BUILD}/.libs/libxml2.a" \
-        -Wl,-Bstatic -lz -Wl,-Bdynamic -llzma \
-        -o "${OUT}/harness"
-
-    rm -f "${OUT}/regexp.o" "${OUT}/fuzz.o"
+    mkdir -p "${OUT}"
+    cp "${BUILD_CACHE}/${FLAVOR}/html" "${OUT}/harness"
     echo "built ${OUT}/harness ($(stat -c %s "${OUT}/harness") bytes)"
     exit 0
 fi
+
 exit 2

@@ -1,17 +1,10 @@
-# Parked: this challenge has no answer key, so the oracle cannot grade it —
-# a run against it burns budget and returns nothing. It stays here rather than
-# being deleted because the harness and the pinned image are still good; it
-# needs its answer bundle (expected fault + built binaries + PoC) before it can
-# rejoin the corpus.
-active: false
-
 bug_id: libxml2-01
 project: libxml2
 is_oss_fuzz: true
-image: docker.io/chenzc2001/fbbench-challenge-libxml2-01:latest
 language: c
 harness:
   sanitizer: asan
   engine: libfuzzer
   invocation: ["@@"]
-capability_set: [reach, crash, differential, class, site]
+
+capability_set: [class, crash, differential, reach, site]
