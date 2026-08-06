@@ -86,12 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_run.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX,
                         help="registry prefix for the canonical challenge images")
     sp_run.add_argument("--image-tag", default=DEFAULT_IMAGE_TAG,
-                        help=f"tag on the challenge image (default: {DEFAULT_IMAGE_TAG}). "
-                             f"'{DEFAULT_IMAGE_TAG}' is the self-contained image: it "
-                             "grades inside the container with no network and scores "
-                             "DISTINCT CRASHES. 'latest' instead POSTs every candidate "
-                             "to the remote oracle, which returns the five-rung "
-                             "capability ladder and an authoritative solved verdict")
+                        help=f"tag on the challenge image (default: {DEFAULT_IMAGE_TAG}); "
+                             "the published image grades in-image with no network")
     sp_run.set_defaults(fn=commands.cmd_run)
 
     sp_traj = sub.add_parser("traj",

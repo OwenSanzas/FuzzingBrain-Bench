@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fbbench.grading import pool
 from fbbench.grading.bugs import count as bug_count
 
 _TEMPLATE = Path(__file__).with_name("summary_template.html")
@@ -59,17 +58,26 @@ def _solved(sc: dict) -> bool:
     return bool(applicable) and all(v == "fired" for v in applicable.values())
 
 
-def _tag_of(image: str) -> str:
-    """The tag half of an image ref — 'local-v1' out of '…/avro-03:local-v1'.
+def _image_pattern(image: str, alias: str) -> str:
+    """One challenge's image ref with its own alias collapsed to a placeholder.
 
-    A ref with no tag is not untagged in practice: Docker resolves a bare name to
-    ``:latest``, which is the remote-graded image. Early runs recorded the name
-    that way, so say what they actually ran rather than nothing. The last colon
-    only starts a tag when no ``/`` follows it, because a registry host may carry
-    a port (``localhost:5000/img``).
+    A sweep runs 68 different images, so their full refs never agree and reporting
+    "mixed" would be useless. Replacing just the alias leaves exactly what they DO
+    share — registry, repository and tag —
+
+        docker.io/osanzas/fbbench-challenge-avro-03:latest
+        -> docker.io/osanzas/fbbench-challenge-<alias>:latest
+
+    so a sweep whose challenges came from one place shows one value, and one that
+    mixed registries or tags still says "mixed" honestly.
+
+    The name, not the tag: since :latest became the self-contained image the tag
+    says nothing about how a run was graded, and `grading` reports that from what
+    the run observed. What the name still answers is "which artifact produced
+    this", which is the reproducibility question.
     """
-    _, sep, tail = image.rpartition(":")
-    return tail if (sep and "/" not in tail) else "latest (implicit)"
+    named = image.replace(alias, "<alias>") if alias else image
+    return named if ":" in named.rpartition("/")[2] else named + ":latest (implicit)"
 
 
 def _scan_dimensions(exp_dir: Path) -> tuple[list[str], list[str], list[int]]:
@@ -103,14 +111,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
 
     difficulty, max_score = _load_difficulty()
 
-    # Unique crashes come from the oracle: it is the only side that can tell one
-    # crash from another, and a runner that could would be able to leak it into
-    # the episode. Safe to read HERE — a summary is built after every episode has
-    # ended. None when there is no batch id or the oracle is unreachable, which
-    # the template renders as absent rather than as zero.
-    uid = pool.batch_uid(exp_dir)
-    crash_score = pool.batch_score(uid) if uid else None
-    crashes_by_cell = pool.per_challenge_crashes(crash_score)
     cells = []
     cost_sum = 0.0
     cfg_seen: dict[str, set] = {}     # config key -> set of values seen across cells
@@ -139,9 +139,12 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                 # Derived, and it has to be derived HERE: every bug has its own
                 # image, so the full refs never agree — it is the tag they share.
                 if cfg.get("image"):
-                    cfg_seen.setdefault("image_tag", set()).add(_tag_of(cfg["image"]))
+                    # Under its own key: the generic loop above already collected
+                    # the 68 raw refs under "image", and adding the pattern there
+                    # would make every sweep disagree with itself.
+                    cfg_seen.setdefault("image_pattern", set()).add(
+                        _image_pattern(cfg["image"], bug))
                 report = cd / "report.html"
-                cell_crashes = crashes_by_cell.get((model, bug))
                 # Two different questions, two numbers. `crashes` counts the
                 # distinct ways this cell reached a fault; `bugs` counts the
                 # defects those faults point at. Recomputed here from the stored
@@ -158,10 +161,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                 cells.append({
                     "bug": bug, "model": model, "sample": sample,
                     "tier": int(sc.get("tier_score", 0)),
-                    # This cell's own count, from its score.json. `uniq_crashes`
-                    # below comes from the oracle's pool and is None when there
-                    # is no oracle to ask — which is exactly the locally-graded
-                    # case, so the two are kept apart rather than merged.
                     "crashes": int(sc.get("unique_crashes", 0)),
                     # How many DEFECTS this cell's crashes point at.
                     "bugs": bug_count(cell_sigmap),
@@ -173,10 +172,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                     # Whether this cell was graded against the capability ladder
                     # at all. False for in-image grading, which has no answer key.
                     "has_ladder": bool(caps),
-                    # Distinct crashes this cell produced; None when unknown.
-                    "uniq_crashes": cell_crashes["crashes"] if cell_crashes else None,
-                    "uniq_unpatched": (cell_crashes["unpatched_upstream"]
-                                       if cell_crashes else None),
                     "d": int(difficulty.get(bug, 0)),  # published difficulty 1..5
                     "caps": caps,
                     "solved": _solved(sc),
@@ -202,10 +197,11 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         # No default: a sweep whose cells disagree, or that recorded nothing,
         # should say so rather than inherit a claim about how it was graded.
         "grading": _agree("grading"),
-        # The image tag is what CHOSE that grading, so the page can say which
-        # artifact produced these numbers rather than only how they were judged.
-        # A sweep whose bugs pin their own images reads "mixed", which is true.
-        "image_tag": _agree("image_tag"),
+        # WHICH ARTIFACT produced these numbers. Not the tag: the tag no longer
+        # selects a grading mode (see fbbench.images), so a bare "latest" would
+        # answer nothing a reader needs. A sweep whose bugs pin their own images
+        # reads "mixed", which is true.
+        "image": _agree("image_pattern"),
     }
 
     # Per (challenge, model): the union across that pair's samples, clustered.
@@ -243,14 +239,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "total_cost": total_cost if total_cost is not None else cost_sum,
         "elapsed_s": elapsed_s,
         "max_score": max_score,
-        # The legacy difficulty score (out of max_score) is kept alongside this
-        # one, not replaced: it is the number every earlier result is expressed
-        # in, and dropping it would make this run incomparable with all of them.
-        "crash_score": ({
-            "batch_uid": crash_score.get("batch_uid"),
-            "cap_per_challenge": crash_score.get("cap_per_challenge"),
-            "models": crash_score.get("models", []),
-        } if crash_score else None),
         "cells": cells,
     }
 

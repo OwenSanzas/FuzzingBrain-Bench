@@ -11,20 +11,15 @@ index (kept named `seed-N` for back-compat with the legacy 518-row dataset).
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
-import urllib.request
-import uuid
 from pathlib import Path
 
-from fbbench.grading import pool
 from fbbench.grading import (
-    DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
+    DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
 from fbbench.grading.bugs import count as bug_count
-from fbbench.images import grades_locally
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
 
@@ -149,13 +144,6 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
 
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
-    # Unique crashes are counted by the oracle, which is the only side that knows
-    # which crashes are the same one. Absent (no batch id, oracle unreachable)
-    # the column is left blank rather than zeroed — zero would be a claim about
-    # the run, and this is a claim about the lookup.
-    uid = pool.batch_uid(out)
-    crash_score = pool.batch_score(uid) if uid else None
-    by_model = {m["model"]: m for m in (crash_score or {}).get("models", [])}
 
     # The five-rung ladder is the ORACLE's verdict. A locally-graded sweep never
     # computes it, and printing five zero columns would read as "the model failed
@@ -223,8 +211,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 agg[k] += int(caps[k])
             if bug_solved:
                 solved += 1
-        cs = by_model.get(model)
-        uniq = f"{cs['crashes_found']}" if cs else f"{crashes}"
+        uniq = f"{crashes}"
         if graded_ladder:
             print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
                   f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
@@ -236,41 +223,6 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             print(f"  {model:24s} {defects:>6d} {uniq:>7s} {n:>7d} "
                   f"{refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
-    if crash_score is None:
-        # Only worth saying when the oracle was the ONLY possible source. A
-        # locally-graded sweep counts its own crashes and just printed them, so
-        # announcing they are unavailable directly contradicts the table above.
-        if graded_ladder:
-            print("  (uniqCr from the oracle unavailable: no batch id recorded, or the "
-                  "oracle could not be reached — counts above are the cells' own)")
-    else:
-        for m in crash_score.get("models", []):
-            print(f"  {m['model']}: {m['crashes_found']} distinct crashes over "
-                  f"{m['challenges']} challenge(s) — {m['preset_solved']} preset, "
-                  f"{m['off_target']} off-target ({m['unpatched_upstream']} still crash the fixed build)")
-
-
-def register_batch(name: str, params: dict) -> str:
-    """Mint an id for this sweep and tell the oracle what flags defined it.
-
-    Returns the id whether or not registration succeeded. Best-effort on purpose:
-    a sweep that cannot reach the grader should still run — it loses the ability
-    to explain its own numbers later, which is worse than not running only if you
-    squint. The cells carry the id regardless, so the grades still group.
-    """
-    batch_uid = uuid.uuid4().hex
-    url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
-    body = json.dumps({"batch_uid": batch_uid, "name": name, "params": params}).encode()
-    req = urllib.request.Request(
-        f"{url}/v1/batches", data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "ngrok-skip-browser-warning": "true"})
-    try:
-        urllib.request.urlopen(req, timeout=30).close()
-    except Exception as e:  # noqa: BLE001 — nothing here is worth failing a sweep for
-        print(f"  note: could not register this batch ({e}); results will still group "
-              f"under {batch_uid[:12]} but their flags will not be recorded")
-    return batch_uid
 
 
 def _write_summary(out: Path, models: list[str], bugs: list[str], seeds: list[int],
@@ -345,30 +297,14 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
           f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
 
-    # One id for the whole matrix, so every grade it produces rolls up to the
-    # flags that defined it. A resumed sweep gets a NEW id: it is a different
-    # experiment in wall-clock terms even when the cells are the same.
-    #
-    # Skipped entirely for a locally-graded sweep. The id exists so the ORACLE
-    # can group the submissions it receives, and a self-contained image sends it
-    # none — so registering was a network round trip whose only visible effect
-    # was a 404 warning about grouping that was never going to happen.
-    local_grading = grades_locally(image_tag)
-    batch_uid = "" if local_grading else register_batch(out.name, {
-        "models": models, "bugs": len(bugs), "samples": samples,
-        "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
-        "stop_on_solve": stop_on_solve, "output": str(out),
-    })
-    # Persist it so `--report-only` months later can still ask the oracle what
-    # this sweep found. Without it the id lives only in the cells' score.json,
-    # and a report over a partially-deleted output tree loses the batch entirely.
-    #
-    # The tree is created here rather than left to the first cell: this is now
-    # the first write into it, and every cell dir is nested under it. Without
-    # this a fresh --output aborts the whole sweep before a single episode runs.
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "batch.json").write_text(json.dumps(
-        {"batch_uid": batch_uid, "name": out.name}, indent=2) + "\n")
+    # No batch id. The id existed so the ORACLE could group the submissions it
+    # received, and the published images send it none — they grade in-image. It
+    # used to be minted whenever the image tag was ":latest", which was a
+    # proxy for "this run grades remotely" and stopped being true when :latest
+    # became the self-contained image. A run that genuinely reaches an oracle
+    # still records that per cell (config.grading, observed not assumed); what it
+    # loses is oracle-side grouping, which nothing in the report depends on.
+    batch_uid = ""
 
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
@@ -387,7 +323,11 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
                      max_turns=max_turns, total=len(cells), already_done=done,
-                     expect_ladder=not local_grading)
+                     # The published images compute no ladder. This is only the
+                     # opening shape of the table; the cells correct it as soon as
+                     # one lands, so a run against a legacy oracle image still
+                     # renders its rungs.
+                     expect_ladder=False)
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME

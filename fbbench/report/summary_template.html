@@ -199,7 +199,7 @@ const maxScore = D.max_score || 0;
 // a signature are two findings, and the same signature seen on seed-0 and
 // seed-1 is one. This is the headline number under in-image grading, where
 // there is no oracle to ask and no answer key to score against.
-const sigKey = (bug, s) => bug + " " + s;
+const sigKey = (bug, s) => bug + " " + s;
 const allSigs = new Set(), sigsByModel = {}, bugsCrashed = new Set();
 for (const c of cells){
   for (const s of (c.sigs || [])){
@@ -238,15 +238,6 @@ const totalBugs = TOTALS ? TOTALS.bugs : null;
 // pair's samples, so this double-counts nothing within a model.
 const modelBugs = m => D.bugs.reduce((a,b) => a + ((pairOf(b,m)||{}).bugs || 0), 0);
 
-// Unique-crash score from the ORACLE: one point per distinct crash it attributed
-// to this run, capped per challenge so a single crash-rich harness cannot
-// dominate. Only ever present for a remotely-graded sweep — in-image runs send
-// the oracle nothing, so there is no batch to score and this stays null.
-const CS = D.crash_score;
-const crashPts   = CS ? CS.models.reduce((a,m) => a + (m.score||0), 0) : null;
-const crashFound = CS ? CS.models.reduce((a,m) => a + (m.crashes_found||0), 0) : null;
-const crashOff   = CS ? CS.models.reduce((a,m) => a + (m.off_target||0), 0) : null;
-const crashUnpat = CS ? CS.models.reduce((a,m) => a + (m.unpatched_upstream||0), 0) : null;
 const errs = cells.filter(c => c.reason === "error").length;
 const elapsed = D.elapsed_s ? fmtDur(D.elapsed_s) : "—";
 function fmtDur(s){s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);
@@ -259,12 +250,9 @@ document.getElementById("stats").innerHTML =
   stat(`${done}`, HAS_LADDER ? "cells graded" : "cells run") +
   (HAS_LADDER ? stat(`${solved}`,"solved","g") : "") +
   (HAS_LADDER && maxScore ? stat(`${score}<span class="den"> / ${maxScore}</span>`,"difficulty score","p") : "") +
-  (CS ? stat(`${crashPts}`,"unique-crash score","g") : "") +
-  (CS ? stat(`${crashFound}<span class="den"> / ${crashOff} off-target</span>`,"distinct crashes") : "") +
-  (CS && crashUnpat ? stat(`${crashUnpat}`,"still crash the fix","p") : "") +
-  (!CS && totalBugs !== null ? stat(`${totalBugs}`,"distinct bugs","g") : "") +
-  (!CS ? stat(`${distinct}`,"distinct crash paths", totalBugs === null ? "g" : "") : "") +
-  (!CS ? stat(`${bugsCrashed.size}<span class="den"> / ${D.bugs.length}</span>`,"challenges crashed","a") : "") +
+  (totalBugs !== null ? stat(`${totalBugs}`,"distinct bugs","g") : "") +
+  stat(`${distinct}`,"distinct crash paths", totalBugs === null ? "g" : "") +
+  stat(`${bugsCrashed.size}<span class="den"> / ${D.bugs.length}</span>`,"challenges crashed","a") +
   (errs ? stat(`${errs}`,"errors") : "") +
   stat(`$${(D.total_cost||0).toFixed(2)}`,"total cost") +
   stat(elapsed,"elapsed","a");
@@ -282,7 +270,12 @@ const cfgRows = [
   ["stop on solve", yn(C.stop_on_solve)],
   ["preserve PoCs", yn(C.preserve_pocs)],
   ["grading", C.grading ?? "not recorded"],
-  ["image tag", C.image_tag ?? "not recorded"],
+  // The image NAME, not its tag. Every challenge runs its own image, so what a
+  // sweep shares is the repository pattern and the tag — shown with the alias as
+  // a placeholder. The tag alone stopped being informative once :latest became
+  // the self-contained image: it no longer says how anything was graded, and
+  // `grading` above answers that from what the run observed.
+  ["challenge image", C.image ?? "not recorded"],
 ];
 document.getElementById("config").innerHTML =
   cfgRows.map(([k,v]) => `<tr><td>${esc(k)}</td><td class="r">${esc(v)}</td></tr>`).join("");
@@ -351,12 +344,9 @@ function sigHtml(sig){
 const tally = {};
 for (const m of models){
   const cs = cells.filter(c => c.model === m);
-  // Prefer the oracle's per-cell counts when this sweep has them; otherwise the
-  // model's own deduped signature set. Never mix the two in one number.
-  const oracle = cs.some(c => c.uniq_crashes != null);
   tally[m] = { solved: cs.filter(c=>c.solved).length, cost: cs.reduce((a,c)=>a+(c.cost||0),0),
                score: cs.filter(c=>c.solved).reduce((a,c)=>a+(c.d||0),0),
-               crashes: oracle ? cs.reduce((a,c)=>a+(c.uniq_crashes||0),0) : modelCrashes(m) };
+               crashes: modelCrashes(m) };
 }
 
 const LADDER_LABEL = {reach:"reach", crash:"crash", differential:"diff", "class":"class", site:"site"};

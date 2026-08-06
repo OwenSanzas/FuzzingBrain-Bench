@@ -31,6 +31,13 @@ strongest evidence available from stored rows, in order:
      cycle, so one defect signs once per frame it happened to die on; mutual
      recursion makes the caller order a coin flip, so signatures come out as
      permutations of each other (avro-03).
+  4. EXHAUSTION IS NOT LOCATED. An allocation failure surfaces at whichever
+     request first crossed the limit, which the input decides and the defect does
+     not -- so out-of-memory and allocation-size-too-big are keyed per challenge
+     rather than by their faulting function. Rule 1 is exactly wrong for them:
+     avro-01's one unchecked header length signed eight times, four of them the
+     same decompress path through BZip2/Deflate/Snappy/XZ, and scored as eight
+     bugs until this rule existed.
 
 WHAT IT WILL NOT DO. It never leaves a verdict open: every signature lands in
 exactly one cluster, so the reported number is complete and reproducible.
@@ -119,11 +126,31 @@ class Bug:
     rule: str = ""                            # which rule merged them
     attributed: bool = True                   # False = no frame to attribute to
     files: list[str] = field(default_factory=list)   # when frame detail is known
+    sites: list[str] = field(default_factory=list)   # distinct faulting functions
 
     @property
     def paths(self) -> int:
         """How many distinct crash paths reached this one bug."""
         return len(self.signatures)
+
+
+# Fault types that say "the program allocated a size it should have rejected".
+# ASan reports allocation-size-too-big when ONE request is absurd; libFuzzer and
+# the JVM report out-of-memory when the total is. Same defect either way: a size
+# taken from the input and never checked.
+#
+# These are NOT located by the function they fault in, and that is the whole
+# reason they need their own rule. An allocation failure surfaces at whichever
+# request happened to cross the limit first, which the INPUT decides, not the
+# defect -- the same reasoning already applied to a blown stack. avro-01 showed
+# what ignoring this costs: one unchecked length in the file header signed eight
+# times, four of them the identical decompress path through BZip2, Deflate,
+# Snappy and XZ, and got counted as eight bugs.
+#
+# Deliberately NOT here: memory-leak. A leak IS its allocation site -- that is
+# the line that forgot to free -- so leaks stay on the faulting-function rule.
+_EXHAUSTION = {"out-of-memory", "allocation-size-too-big",
+               "java.lang.outofmemoryerror"}
 
 
 def _recursion_key(klass: str, frames: list[str]) -> str | None:
@@ -195,6 +222,10 @@ def cluster(signatures: dict[str, list[dict]]) -> list[Bug]:
             key, rule, attributed = f"unattributed:{klass}", "no-frames", False
         elif (rk := _recursion_key(klass, names_detail)):
             key, rule, attributed = rk, "recursion-cycle", True
+        elif klass in _EXHAUSTION:
+            # One key for the whole challenge, not one per allocation site.
+            # Clustering runs per challenge, so this is already scoped.
+            key, rule, attributed = "exhaustion", "unbounded-allocation", True
         else:
             frame = attribution_frame(names_detail)
             key, rule, attributed = f"site:{frame}", "faulting-frame", True
@@ -203,6 +234,9 @@ def cluster(signatures: dict[str, list[dict]]) -> list[Bug]:
         if bug is None:
             bug = buckets[key] = Bug(key=key, rule=rule, attributed=attributed)
         bug.signatures.append(sig)
+        site = attribution_frame(names_detail)
+        if site and site not in bug.sites:
+            bug.sites.append(site)
         for f in detail[:1]:
             if f.get("file") and str(f["file"]) not in bug.files:
                 bug.files.append(str(f["file"]))
@@ -232,8 +266,10 @@ def cluster(signatures: dict[str, list[dict]]) -> list[Bug]:
                        files=[path])
             for b in sorted(group, key=lambda b: b.key):
                 head.signatures.extend(b.signatures)
+                head.sites.extend(s for s in b.sites if s not in head.sites)
             merged.append(head)
         bugs = merged + loose
+
 
     for b in bugs:
         b.signatures = sorted(set(b.signatures))

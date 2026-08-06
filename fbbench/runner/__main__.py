@@ -79,9 +79,7 @@ def main() -> int:
                     help="registry prefix for the canonical challenge images")
     ap.add_argument("--image-tag", default=DEFAULT_IMAGE_TAG,
                     help=f"tag on the challenge image (default: {DEFAULT_IMAGE_TAG}). "
-                         f"'{DEFAULT_IMAGE_TAG}' is the self-contained variant that "
-                         "grades inside the image and needs no network; 'latest' "
-                         "grades against the remote oracle")
+                         "the published image grades in-image with no network")
     ap.add_argument("--list-models", action="store_true",
                     help="print the supported-model catalog and exit")
     args = ap.parse_args()
@@ -101,17 +99,9 @@ def main() -> int:
         return 2
 
     # The agent runs against the PUBLIC challenge image — the same artifact the
-    # world runs. Which one depends on the tag: :local-v1 (the default) grades
-    # inside the image with no network at all, :latest grades by POSTing to the
-    # remote oracle. A bug may pin its own image via the optional top-level
-    # `image:` field in bench.yaml (a full ref, e.g.
-    # docker.io/zhicheng/my-bug:latest), which carries its own tag and so ignores
-    # --image-tag; otherwise fall back to <image_prefix><alias>:<image_tag> under
-    # the canonical namespace.
-    #
-    # The tag is always written out rather than left off, because a bare name is
-    # not "whatever is local" — Docker resolves it to :latest, which is the
-    # remote-graded image and not what the default asked for.
+    # world runs, self-contained and grading in-container. A bug may pin its own
+    # image via the optional top-level `image:` field in bench.yaml, which carries
+    # its own tag and so ignores --image-tag.
     bug_image = read_bench(Path(bug_dir) / "bench.yaml").get("image")
     image = bug_image or f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}:{args.image_tag}"
     out_dir = (Path(args.out_dir) if args.out_dir
