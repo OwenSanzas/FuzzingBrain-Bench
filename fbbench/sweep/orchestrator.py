@@ -95,7 +95,6 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              seed: int | None = None, batch: str | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
-             image_tag: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
     truth so the single and multi paths forward the SAME per-cell flags."""
@@ -114,22 +113,20 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
         cmd += ["--api-key", api_key]
     if image_prefix:
         cmd += ["--image-prefix", image_prefix]
-    if image_tag:
-        cmd += ["--image-tag", image_tag]
     return cmd
 
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
              stop_on_solve: bool = False, api_key: str | None = None,
-             image_prefix: str | None = None, image_tag: str | None = None,
+             image_prefix: str | None = None,
              runner: list[str] | None = None,
              batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
                    seed=sample, batch=batch,
                    preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag,
+                   api_key=api_key, image_prefix=image_prefix,
                    runner=runner)
     try:
         # The episode self-stops at `timeout`; SIGKILL only if it overruns the
@@ -229,8 +226,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                jobs: int = 1, dashboard_pref: bool | None = None,
                preserve_pocs: bool = True, stop_on_solve: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
-               image_tag: str | None = None,
-               report_only: bool = False, runner: list[str] | None = None,
+                 report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
                model_map: dict[str, str] | None = None) -> int:
     """THE engine: run the (models x bugs x samples) matrix. One code path for
@@ -333,7 +329,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                            api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner,
+                            api_key=api_key, image_prefix=image_prefix, runner=runner,
                             batch=batch_uid)
         except Exception as e:  # noqa: BLE001
             import traceback
@@ -382,7 +378,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                    seed=sample, batch=batch_uid,
                                    preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
-                                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner)
+                                   api_key=api_key, image_prefix=image_prefix, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
                     STATUS.cell_finish(model, bug, sample, r)

@@ -33,11 +33,11 @@ def grade_blob(bug_dir: Path, blob: Path, image: str | None = None,
     2.1 MB). That failure is silent — the write does not happen and grading then
     reports the candidate missing — so size must not decide what can be graded.
     """
-    from fbbench.images import DEFAULT_IMAGE_PREFIX, DEFAULT_IMAGE_TAG
+    from fbbench.images import challenge_image
     from fbbench.runner.mcp_client import MCPClient, _full_scan_alias
 
     alias = _full_scan_alias(str(bug_dir))
-    image = image or f"{DEFAULT_IMAGE_PREFIX}{alias}:{DEFAULT_IMAGE_TAG}"
+    image = image or challenge_image(alias)
     data = Path(blob).read_bytes()
 
     t0 = time.time()

@@ -179,17 +179,19 @@ they localize a hint down to the crash-region file, which is derived from the
 answer key, so they run in the maintainer's private harness, not against the
 sealed public images.
 
-## The capability ladder
+## What a run scores
 
-A candidate used to be graded on five nested rungs — `reach`, `crash`,
-`differential`, `class`, `site` — weakest to strongest. Every one of them past
-`crash` is an **answer-key** verdict: it needs the PoC, the documented fault, or
-a build at the fix commit to compare against. None of that ships in an image, and
-the grading service that held it has been retired, so **no published challenge
-computes the ladder**. Each `bench.yaml` still declares the rungs its bug would
-have supported (`capability_set`), which is what the research eval protocol reads;
-a public run scores distinct crashes, and its reports show no ladder rather than
-five unfired rungs.
+**Distinct crashes.** A crash's identity is its sanitizer fault type plus its top
+stack frames, so the same fault reached twenty times counts once, and repeats
+across a challenge's samples collapse into one.
+
+Deciding whether a crash is *the* defect a challenge was built around needs an
+answer key — the PoC, the documented fault, a build at the fix commit — and no
+image ships one. So a run can tell you an input crashed, and whether that crash
+is one it had not produced before, but not that it crashed the *right* way.
+
+Each `bench.yaml` still declares a `capability_set`; it is read by the research
+eval protocol below, and is not scored here.
 
 ## Other parameters
 
@@ -202,10 +204,8 @@ fb-bench run <bugs> \
     --samples 3 \             # repeat each (model, bug) N times
     --output my-experiment \  # results under output/my-experiment/ (name or path)
     --no-preserve-pocs \      # graded blobs are KEPT by default; pass this to drop them
-    --stop-on-solve \         # end at the first solve; off by default, so an episode
-                              # keeps hunting for more distinct crashes
-    --image-tag latest        # tag on the challenge image; there is one published
-                              # tag, so this is only for a private rebuild
+    --stop-on-solve           # end at the first crash; off by default, so an
+                              # episode keeps hunting for more distinct crashes
 ```
 
 Grade a hand-crafted or external (AFL++ / libFuzzer / honggfuzz) PoC without any

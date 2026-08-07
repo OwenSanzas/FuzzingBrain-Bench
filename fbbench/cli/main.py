@@ -5,7 +5,7 @@ import argparse
 import sys
 
 from fbbench.cli import commands
-from fbbench.images import DEFAULT_IMAGE_PREFIX, DEFAULT_IMAGE_TAG
+from fbbench.images import DEFAULT_IMAGE_PREFIX
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,9 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="provider API key; default reads ./.env")
     sp_run.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX,
                         help="registry prefix for the canonical challenge images")
-    sp_run.add_argument("--image-tag", default=DEFAULT_IMAGE_TAG,
-                        help=f"tag on the challenge image (default: {DEFAULT_IMAGE_TAG}); "
-                             "the published image grades in-image with no network")
     sp_run.set_defaults(fn=commands.cmd_run)
 
     sp_traj = sub.add_parser("traj",

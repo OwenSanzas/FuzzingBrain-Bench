@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fbbench.env import load_dotenv
 from fbbench.grading.bench_yaml import capability_set, find_bug, read_bench
-from fbbench.images import DEFAULT_IMAGE_PREFIX, DEFAULT_IMAGE_TAG
+from fbbench.images import DEFAULT_IMAGE_PREFIX, challenge_image
 from fbbench.models import CATALOG, PRICES, cost_usd, default_sweep
 from fbbench.paths import REPO
 from fbbench.runner.backends import make_backend
@@ -77,9 +77,6 @@ def main() -> int:
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
     ap.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX,
                     help="registry prefix for the canonical challenge images")
-    ap.add_argument("--image-tag", default=DEFAULT_IMAGE_TAG,
-                    help=f"tag on the challenge image (default: {DEFAULT_IMAGE_TAG}). "
-                         "the published image grades in-image with no network")
     ap.add_argument("--list-models", action="store_true",
                     help="print the supported-model catalog and exit")
     args = ap.parse_args()
@@ -100,10 +97,9 @@ def main() -> int:
 
     # The agent runs against the PUBLIC challenge image — the same artifact the
     # world runs, self-contained and grading in-container. A bug may pin its own
-    # image via the optional top-level `image:` field in bench.yaml, which carries
-    # its own tag and so ignores --image-tag.
+    # image via the optional top-level `image:` field in bench.yaml, tag included.
     bug_image = read_bench(Path(bug_dir) / "bench.yaml").get("image")
-    image = bug_image or f"{args.image_prefix}{_full_scan_alias(str(bug_dir))}:{args.image_tag}"
+    image = bug_image or challenge_image(_full_scan_alias(str(bug_dir)), args.image_prefix)
     out_dir = (Path(args.out_dir) if args.out_dir
                else Path(args.output) / args.bug / args.model)
     out_dir.mkdir(parents=True, exist_ok=True)
