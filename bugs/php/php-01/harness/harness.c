@@ -1,5 +1,3 @@
-
-
 #include "fuzzer.h"
 
 #include "Zend/zend.h"
