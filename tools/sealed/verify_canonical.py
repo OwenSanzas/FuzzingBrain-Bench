@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """End-to-end verification of the CANONICAL path for every sealed challenge.
 
-Unlike verify_sealed.py (which POSTs the PoC straight to the oracle and greps the
-image separately), this drives the *actual* runtime: it launches each public
+Unlike verify_sealed.py (which inspects the image and grades one throwaway
+input), this drives the *actual* runtime end to end: it launches each public
 challenge image's own mcp-server over stdio — `docker run -i <image> mcp-server`
 — and exercises every tool the agent uses, exactly as an external user would.
 
 Per bug it asserts the four user-required properties:
   1. no errors            — initialize/setup succeed; the container speaks MCP
   2. normal operation     — exec works as the sole FS tool (read via cat, write
-                            via printf, list via ls); run_poc_on_harness() fires K_b
+                            via printf, list via ls); run_poc_on_harness() answers
   3. answers don't leak   — no poc/grader/binaries/expected.yaml reachable (via
                             exec ls AND a real in-container `find`); the
                             scrubbed bench.yaml carries no upstream/fix provenance
   4. tool calls don't err — every tool returns a well-formed result, and exec()
-                            has NO network (cannot brute-force the remote oracle)
+                            has NO network (cannot fetch upstream material)
 
 Usage:
   verify_canonical.py [--only a,b] [--sample N] [--workers 3]
@@ -106,7 +106,7 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
         lkout = (lk.get("stdout") or "").strip() if isinstance(lk, dict) else str(lk)
         ok("no_answer_files", lkout == "", lkout[:200])
 
-        # --- grade fires K_b through the container -> remote oracle ---
+        # --- grade answers, in-image ---
         if poc is None:
             ok("grade_fires", False, "no poc to submit")
         else:
@@ -128,7 +128,7 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
             except Exception: pass
     res["pass"] = bool(res["checks"]) and all(res["checks"].values()) and not res["errors"]
     if settle:
-        # Let the (small) oracle host release a memory-heavy grade's RSS before
+        # Let the host release a memory-heavy grade's RSS before
         # the next one — reduces transient differential misses under back-to-back load.
         time.sleep(settle)
     return res
@@ -140,7 +140,7 @@ def main():
     ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--settle", type=float, default=0.0,
-                    help="seconds to pause after each bug (eases oracle host memory pressure)")
+                    help="seconds to pause after each bug (eases host memory pressure)")
     ap.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-")
     ap.add_argument("--out", default=str(ROOT / "tools" / "sealed" / "verify_canonical_report.json"))
     a = ap.parse_args()

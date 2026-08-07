@@ -54,7 +54,7 @@ def main() -> int:
     ap.add_argument("--out-dir", default=None,
                     help="literal output dir; takes precedence over --output")
     ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
-                    help="save every graded candidate blob into pocs/{solved,failed}/ "
+                    help="save every graded candidate blob into pocs/{crashed,clean}/ "
                          "(default on; pass --no-preserve-pocs to disable)")
     ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
                     help="end the episode as soon as the target defect is reproduced "
@@ -110,10 +110,10 @@ def main() -> int:
 
     backend = make_backend(args.model, api_key=args.api_key)
     pocs_dir = (out_dir / "pocs") if args.preserve_pocs else None
-    # One id per episode, so the oracle can group this run's submissions. Minted
-    # here rather than per grade: the point is that twenty inputs from one run
-    # are one attempt at the challenge, not twenty. Nothing depends on it being
-    # unforgeable — it decides no verdict, only how results are grouped.
+    # One id per episode, recorded in score.json so a result can be traced back
+    # to the run that produced it. It decides no verdict and reaches nothing
+    # outside this process — grading happens in the container, which needs no
+    # identity to run a harness on a file.
     run_identity = {
         "uid": uuid.uuid4().hex,
         "batch": args.batch or "",
@@ -121,7 +121,7 @@ def main() -> int:
         "arm": "api",
         "seed": str(args.seed) if args.seed is not None else "",
     }
-    # Everything (challenge surface, workspace, remote grading) lives in the
+    # Everything (challenge surface, workspace, grading) lives in the
     # image; the host stages nothing. bug_dir="/src" is the in-container view.
     ep_bug_dir = "/src"
     result = run_episode(
@@ -138,16 +138,15 @@ def main() -> int:
         pocs_dir=str(pocs_dir) if pocs_dir else None,
         stop_on_solve=args.stop_on_solve,
         mode=args.mode,
-        run=run_identity,
     )
 
     score = {
         "bug_id": result.bug_id,
         "model": result.model,
-        # Identity, not score. The oracle knows which distinct crashes this run
+        # Identity, not score. Which distinct crashes this run
         # found; the runner deliberately does not, because a runner that knows
         # can leak it back into the episode. Recording the id lets the report --
-        # which runs afterwards, outside any episode -- ask the oracle.
+        # which runs afterwards, outside any episode -- correlate them.
         "run_uid": run_identity["uid"],
         "batch_uid": run_identity["batch"] or None,
         # Every run knob that shaped this episode — surfaced verbatim in the
@@ -158,59 +157,31 @@ def main() -> int:
             "timeout_s": args.timeout,
             "stop_on_solve": bool(args.stop_on_solve),
             "preserve_pocs": bool(args.preserve_pocs),
-            # What actually graded this episode, not what we expected to. It was
-            # hardcoded to "remote-oracle", which was true of every run until the
-            # images could grade themselves and then quietly was not — a run
-            # graded entirely offline still reported that an oracle had judged
-            # it. "not-exercised" means the model never submitted a candidate, so
-            # nothing graded and there is nothing to claim.
+            # Observed, not assumed: recorded only once something was actually
+            # graded. "not-exercised" means the model never submitted a
+            # candidate, so nothing graded and there is nothing to claim.
             "grading": result.grading or "not-exercised",
             "image": image,
             "capability_set": sorted(capability_set(bug_dir) or []),
         },
-        # Headline metric: the number of DISTINCT crashes the agent found (unique
-        # crash-type + top-frames signatures). The capability ladder below is kept
-        # as a per-oracle diagnostic, not the score.
+        # The metric: the number of DISTINCT crashes the agent found (unique
+        # crash-type + top-frames signatures).
         "score": result.unique_crashes,
         "unique_crashes": result.unique_crashes,
         "crash_signatures": sorted(result.crash_signatures),
-        # Where each of those crashes faulted. NOT part of the identity — the
-        # signature is deliberately name-only, because names survive the rebuilds
-        # this corpus does constantly and line numbers do not. It is here because
-        # grouping crashes into the DEFECTS they point at needs the faulting
-        # location, and re-deriving it later from an archived transcript fails
-        # exactly where it matters: the deep traces get truncated on the way.
-        #
-        # This is an OBSERVATION, and the only thing stored. The bug count itself
-        # is an interpretation of it (fbbench.grading.bugs) and is derived where
-        # it is reported — storing it too would freeze one ruleset into every
-        # cell and go stale the moment the rules improve.
-        "crash_frames": {s: result.crash_frames.get(s, [])
-                         for s in sorted(result.crash_signatures)},
         "terminated_reason": result.terminated_reason,
         "refusal_retries": result.refusal_retries,
         "malformed_retries": result.malformed_retries,
         "turns_used": result.turns_used,
         "duration_s": result.duration_s,
     }
-    # The five-rung ladder and `solved` are the ORACLE's verdict. Local grading
-    # does not compute them — it has no answer key, no coverage build and no
-    # fixed-commit build — so under it every rung sat at "not_fired" and `solved`
-    # at false. Both read as measurements that came back negative when nothing
-    # was ever measured, which is the more misleading of the two mistakes.
-    #
-    # So they are written only when a grader actually produced them. A consumer
-    # that finds no `capabilities` key knows the run has nothing to say about the
-    # ladder, rather than being told it failed every rung.
-    if result.grading != "in-image":
-        score.update({
-            "solved": result.solved,
-            "capabilities": result.capabilities,
-            "capabilities_bestof": result.capabilities_bestof,
-            "tier_score": sum(1 for v in result.capabilities.values() if v == "fired"),
-            "tier_score_bestof": sum(1 for v in result.capabilities_bestof.values()
-                                     if v == "fired"),
-        })
+    # No `capabilities`, no `tier_score`, no `solved`. Every rung past `crash`
+    # needs an answer key — the PoC, the documented fault, a build at the fix
+    # commit — and none of that ships in a challenge image, so nothing can
+    # compute them. Writing them anyway put five "not_fired" rungs and a false
+    # `solved` into every run: measurements that read as negative results when
+    # nothing had been measured at all. A consumer that finds no `capabilities`
+    # key knows this run has nothing to say about the ladder.
     if result.error:
         score["error"] = result.error
     cost = {"model": result.model,

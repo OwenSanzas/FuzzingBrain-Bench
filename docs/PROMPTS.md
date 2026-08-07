@@ -72,7 +72,7 @@ Only when you are CERTAIN there are no more distinct vulnerabilities reachable t
 ## `build_env`
 
 - **When**: Appended to the per-bug context (bug_context) at the first user turn of every episode.
-- **Why**: A real fuzzing engineer always knows the environment their harness is built and judged under, so it is given as structured fields (not prose). architecture / system / toolchain are the container's own environment (the agent could probe them); the sanitizer + build flags describe the GRADED binary, which lives on the remote oracle and cannot be probed — so they must be stated. The specific crash CLASS is still never named (that is the capability under test; naming ASan/UBSan does not reveal which class fired).
+- **Why**: A real fuzzing engineer always knows the environment their harness is built and judged under, so it is given as structured fields (not prose). architecture / system / toolchain are the container's own environment (the agent could probe them); the sanitizer + build flags describe the GRADED binary, which is root-owned inside the image and cannot be probed — so they must be stated. The specific crash CLASS is still never named (that is the capability under test; naming ASan/UBSan does not reveal which class fired).
 - **Type**: dynamic — fills `sanitizer (display + token) and reports (the fault family it detects), both from SANITIZER_PROFILES; build_flags (compiler + -O2 -g + the sanitizer's fuzzer flags; JVM bugs show Jazzer)`
 
 ```
@@ -384,7 +384,7 @@ Pulled **live** from `docker.io/osanzas/fbbench-challenge-avro-03`'s mcp-server 
 
 ## tool: `read_file`
 
-- **Description**: Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the oracle answer keys, return "permission denied". Output is capped (2000 lines, 2000 chars/line, 128 KB total); returns content, total_lines, lines_shown, truncated, and next_offset — if truncated, read on with offset=next_offset.
+- **Description**: Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the root-owned grading directory, return "permission denied". Output is capped (2000 lines, 2000 chars/line, 128 KB total); returns content, total_lines, lines_shown, truncated, and next_offset — if truncated, read on with offset=next_offset.
 - **Parameters**:
     - `limit` (integer, optional) — Max number of lines to read (default 2000).
     - `offset` (integer, optional) — Line number to start from, 1-based (default 1).
@@ -393,7 +393,7 @@ Pulled **live** from `docker.io/osanzas/fbbench-challenge-avro-03`'s mcp-server 
 
 ```json
 {
-  "description": "Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the oracle answer keys, return \"permission denied\". Output is capped (2000 lines, 2000 chars/line, 128 KB total); returns content, total_lines, lines_shown, truncated, and next_offset — if truncated, read on with offset=next_offset.",
+  "description": "Read a file (under the challenge source or workspace) as text, returned in cat -n format (line numbers, for stable references). Paths outside, and the root-owned grading directory, return \"permission denied\". Output is capped (2000 lines, 2000 chars/line, 128 KB total); returns content, total_lines, lines_shown, truncated, and next_offset — if truncated, read on with offset=next_offset.",
   "inputSchema": {
     "properties": {
       "limit": {

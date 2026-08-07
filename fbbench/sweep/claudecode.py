@@ -9,7 +9,7 @@ same matrix machinery (resume / parallel / aggregate / report) as every arm.
 The sibling of the Codex arm (fbbench/sweep/codex.py). It reuses the SAME bench
 MCP server (the public canonical challenge image: `docker run -i --rm <image>
 mcp-server`), the SAME neutral discovery view, the SAME netns-isolated exec(),
-and grades through the SAME remote oracle — so the only difference between the
+and grades through the SAME in-image harness — so the only difference between the
 two product-CLI arms is the model/driver.
 
 Cheat hardening (audited empirically — see the module docstring notes below):
@@ -28,7 +28,7 @@ off, not just forbidden by the prompt:
   - the child env is scrubbed to PATH+HOME only (HOME kept for `claude` auth),
     mirroring Codex's `inherit = "none"`.
 The one residual cheat surface — the in-container `mcp__bench__exec` reading the
-oracle answer key — is SHARED with the Codex arm (a bench-level issue), not a
+answer key — is SHARED with the Codex arm (a bench-level issue), not a
 Claude-specific regression.
 """
 from __future__ import annotations
@@ -47,10 +47,10 @@ from fbbench.grading import capability_set, find_bug
 from fbbench.prompts import CODEX_TASK_PROMPT
 from fbbench.runner.mcp_client import _full_scan_alias
 # Reuse the Codex arm's host-side helpers verbatim so the two arms grade and
-# select PoCs identically (same remote oracle, same blob heuristic).
+# select PoCs identically (same in-image grader, same blob heuristic).
 from fbbench.sweep.codex import (
     IMAGE_PREFIX,
-    _best_caps, _candidate_blobs, _codex_nudge,
+    _crash_signatures, _candidate_blobs, _codex_nudge,
 )
 
 MAX_TURNS_DEFAULT = 100
@@ -433,12 +433,12 @@ def _stream_to_transcript(log_path: str, out_path: Path, *, model: str,
 
 def _persist(cell_dir: Path, *, bug: str, model: str, real: str,
              r: dict, blobs: list[str], alias: str, preserve_pocs: bool = True) -> dict:
-    """Re-grade blobs through the remote oracle, write score.json + report.
-    With preserve_pocs, every graded candidate is kept under pocs/{solved,failed}/
+    """Re-grade blobs in the challenge image, write score.json + report.
+    With preserve_pocs, every graded candidate is kept under pocs/{crashed,clean}/
     (same forensic record as the API arm)."""
     cell_dir.mkdir(parents=True, exist_ok=True)
-    caps, best_blob, ts, solved = _best_caps(
-        alias, blobs, pocs_dir=str(cell_dir / "pocs") if preserve_pocs else None)
+    sigs, best_blob = _crash_signatures(
+        Path(real), blobs, pocs_dir=str(cell_dir / "pocs") if preserve_pocs else None)
     if best_blob:
         shutil.copy(best_blob, cell_dir / "best_blob")
     if Path(r["log_path"]).is_file():
@@ -446,9 +446,9 @@ def _persist(cell_dir: Path, *, bug: str, model: str, real: str,
     kb = capability_set(real)
     score = {
         "bug_id": bug, "model": model_label(model), "seed": 0,
-        "capabilities": caps, "tier_score": ts, "k_b": kb,
-        # Authoritative target_bug_found from _best_caps — matches the API arm.
-        "solved": solved,
+        # Scored on distinct crash signatures, the same unit the API arm reports.
+        "unique_crashes": len(sigs), "crash_signatures": sorted(sigs),
+        "score": len(sigs), "k_b": kb, "grading": "in-image",
         "terminated_reason": r["terminated"], "turns_used": r["turns"],
         "max_turns": r.get("max_turns"), "duration_s": round(r["duration_s"], 1),
         "grade_calls": r["grade_calls"], "blobs_written": len(blobs),

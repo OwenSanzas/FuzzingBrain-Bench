@@ -107,7 +107,7 @@ def list_bugs(repo: Path = REPO, include_inactive: bool = False) -> list[tuple[s
     ]
     # The dev tree ships pre-built binaries/ next to each bug and treats their
     # presence as "shippable"; the public (sealed) tree has no binaries at all —
-    # the answer artifacts live only in the remote oracle — so there we fall back
+    # the answer artifacts do not ship at all — so there we fall back
     # to listing every bug that has a bench.yaml.
     has_binaries = any((sub / "binaries").is_dir() for sub in subs)
     bugs: list[tuple[str, Path]] = []

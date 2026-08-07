@@ -19,7 +19,6 @@ from pathlib import Path
 from fbbench.grading import (
     DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
-from fbbench.grading.bugs import count as bug_count
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
 
@@ -56,8 +55,8 @@ def cell_dir(out: Path, bug: str, model: str, sample: int) -> Path:
 
     Keeps the legacy `seed-N` directory naming for back-compat with the
     518 existing data points. It still does not drive sampling — it is which
-    repeat this is, forwarded to the runner as --seed so the oracle can tell
-    one cell's repeats apart in its own records."""
+    repeat this is, forwarded to the runner as --seed so one cell's repeats
+    can be told apart."""
     return out / bug / model / f"seed-{sample}"
 
 
@@ -160,16 +159,12 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
         print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
               f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
     else:
-        # bugs FIRST: it is the score. paths sits next to it because reaching one
-        # defect several ways is a real skill and the number would otherwise
-        # vanish behind the grouping.
-        print(f"  {'model':24s} {'bugs':>6s} {'paths':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
+        print(f"  {'model':24s} {'uniqCr':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
     print("  " + "-" * 90)
     for model in models:
         agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
         solved = refusals = n = 0
-        crashes = 0  # distinct crash PATHS (best-of-seeds per bug, summed)
-        defects = 0  # headline: distinct BUGS those paths point at
+        crashes = 0  # headline: total DISTINCT crashes (best-of-seeds per bug, summed)
         cost = 0.0
         for bug in bugs:
             # Coverage columns are best-of-seeds per rung (did the model ever
@@ -180,10 +175,6 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             seen = False
             bug_solved = False
             bug_crashes = 0  # best (max) distinct-crash count across this bug's seeds
-            # Signature -> frames, unioned over this bug's seeds. Bugs are counted
-            # on the union rather than per seed: two seeds that reached one defect
-            # two ways found one bug, and a max/sum over seeds would not say that.
-            bug_sigmap: dict[str, list] = {}
             for seed in seeds:
                 sj = cell_dir(out, bug, model, seed) / "score.json"
                 if not sj.is_file():
@@ -193,9 +184,6 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 for k in caps:
                     if s.get("capabilities", {}).get(k) == "fired":
                         caps[k] = True
-                seed_frames = s.get("crash_frames") or {}
-                for sig in (s.get("crash_signatures") or []):
-                    bug_sigmap.setdefault(sig, seed_frames.get(sig) or [])
                 bug_crashes = max(bug_crashes, int(s.get("unique_crashes", 0)))
                 bug_solved = bug_solved or _seed_solved(s)
                 if s.get("terminated_reason") == "refusal":
@@ -206,7 +194,6 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 continue
             n += 1
             crashes += bug_crashes
-            defects += bug_count(bug_sigmap)
             for k in agg:
                 agg[k] += int(caps[k])
             if bug_solved:
@@ -218,10 +205,8 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                   f"{refusals:>6d} {cost:>8.2f}")
         else:
             # `solved` needs the answer key too, so it goes with the ladder; what
-            # is left is bugs found, the paths that reached them, and how many
-            # challenges the model was run against.
-            print(f"  {model:24s} {defects:>6d} {uniq:>7s} {n:>7d} "
-                  f"{refusals:>6d} {cost:>8.2f}")
+            # is left is how many challenges the model was run against.
+            print(f"  {model:24s} {uniq:>7s} {n:>7d} {refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
 
 
@@ -297,13 +282,9 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
           f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
 
-    # No batch id. The id existed so the ORACLE could group the submissions it
-    # received, and the published images send it none — they grade in-image. It
-    # used to be minted whenever the image tag was ":latest", which was a
-    # proxy for "this run grades remotely" and stopped being true when :latest
-    # became the self-contained image. A run that genuinely reaches an oracle
-    # still records that per cell (config.grading, observed not assumed); what it
-    # loses is oracle-side grouping, which nothing in the report depends on.
+    # No batch id. It existed to group submissions on a grading service that no
+    # longer takes any — every image grades in-image — and nothing in the report
+    # depends on the grouping.
     batch_uid = ""
 
     from rich.console import Console
@@ -323,18 +304,16 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
                      max_turns=max_turns, total=len(cells), already_done=done,
-                     # The published images compute no ladder. This is only the
-                     # opening shape of the table; the cells correct it as soon as
-                     # one lands, so a run against a legacy oracle image still
-                     # renders its rungs.
+                     # No image computes a ladder — the rungs past `crash` need
+                     # an answer key and none ships one.
                      expect_ladder=False)
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME
         # cell dir, so resume / aggregate / report downstream are arm-agnostic.
         #
-        # Isolate per-cell failures: an arm that RAISES (e.g. the grade oracle is
-        # unreachable, per _best_caps) must NOT kill the whole matrix — otherwise a
+        # Isolate per-cell failures: an arm that RAISES (e.g. grading a candidate
+        # blob failed, per codex._crash_signatures) must NOT kill the matrix — a
         # single bad cell discards the aggregate + report for every cell that DID
         # finish. Catch it, record the error, and let the run continue. No score.json
         # is written on the failing path (the arms write it only after grading), so
@@ -366,7 +345,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
 
     if jobs > 1:
         # Parallel: each cell is an independent subprocess + Docker container,
-        # graded independently by the remote oracle, so concurrency is safe.
+        # grading inside its own, so concurrency is safe.
         from concurrent.futures import ThreadPoolExecutor
 
         todo = [(i, m, b, s) for i, (m, b, s) in enumerate(cells, 1)

@@ -11,13 +11,10 @@ package main
 // is. An image is worth exactly as much to someone reading it as the upstream
 // source already is.
 //
-// The legacy five-rung capability ladder (reach / crash / differential / class
-// / site) is deliberately NOT implemented here. It needs the answer key, and
-// scoring moved to distinct crashes; grading against the ladder stays behind a
-// remote oracle for anyone who still wants it (see gradeserver.go).
-//
-// Harness execution is carried over from the proven grade-core judge so a local
-// verdict and a remote one agree on what counts as a crash.
+// The five-rung capability ladder (reach / crash / differential / class / site)
+// is deliberately NOT implemented here, and cannot be: every rung past `crash`
+// needs the answer key — the PoC, the documented fault, a build at the fix
+// commit — and none of that ships in an image. Scoring is distinct crashes.
 
 import (
 	"bytes"
@@ -60,9 +57,9 @@ func (s *server) localHarness() string {
 // key, and the oracle dir is 0700 root so exec() cannot read it — but anyone who
 // pulls the image can, so keep it to what grading genuinely needs.
 type oracleConfig struct {
-	// TimeoutS bounds one harness run. Per-challenge because it is what the
-	// remote oracle has always used; a finite-but-slow algorithmic DoS is only
-	// distinguishable from a hang by the gate it was tuned against.
+	// TimeoutS bounds one harness run. Per-challenge because a finite-but-slow
+	// algorithmic DoS is only distinguishable from a hang by the gate it was
+	// tuned against.
 	TimeoutS int `yaml:"timeout_s"`
 	// DetectLeaks turns LeakSanitizer on for the challenges whose defect IS a
 	// leak. Left off everywhere else: LSan ships inside ASan and reports at
@@ -202,13 +199,6 @@ func (s *server) gradeLocal(abs string) (any, error) {
 				out["crash_signature"] = sig.CanonSig
 				out["crash_signature_text"] = sig.SigText
 				out["crash_class"] = sig.Class
-				// Revealed with the signature, and only ever to the trusted
-				// runner: the seal in toolGrade is an allow-list of
-				// harness_output + crash_novelty, so this never reaches the
-				// agent. It tells the agent nothing it has not already seen in
-				// its own harness output either -- but it stays behind the
-				// reveal so the payload has exactly one rule, not two.
-				out["crash_frames"] = sig.Frames
 			}
 		}
 	}
@@ -229,8 +219,8 @@ func (s *server) gradeLocal(abs string) (any, error) {
 // telling a run that a crash is old because ANOTHER run found it would leak
 // other runs' findings into this one's feedback.
 //
-// Returns "new" or "duplicate", matching what the remote oracle sends, so the
-// agent-facing field means the same thing either way.
+// Returns "new" or "duplicate" — the two values the agent-facing
+// crash_novelty field can take when an input faulted.
 func (s *server) observe(canonSig string) string {
 	if s.seenSigs == nil {
 		s.seenSigs = map[string]bool{}
@@ -267,16 +257,6 @@ type sigResult struct {
 	CanonSig string `json:"canon_sig"`
 	SigText  string `json:"sig_text"`
 	Class    string `json:"klass"`
-	// Where the crash faulted: {"func","file","line"} per frame, top first, up
-	// to the script's KEEP_FRAMES. NOT part of the identity -- CanonSig is
-	// function names only, because a name survives a rebuild and a line number
-	// does not. Kept because grouping crashes into the DEFECTS they point at
-	// needs the faulting location, and this is the only place it still exists:
-	// the signature is computed from the RAW output, while harness_output below
-	// is tail-truncated, so a deep recursion trace cannot be re-parsed
-	// downstream. Dropping these was silently costing the bug count on exactly
-	// the challenges that over-count most.
-	Frames []map[string]any `json:"frames"`
 }
 
 // defaultSigScript is where build_challenge bakes the vendored copy of the
@@ -619,4 +599,13 @@ func tailTrunc(s string, n int) string {
 		return s
 	}
 	return "...[truncated]...\n" + s[len(s)-n:]
+}
+
+// trunc caps a string at n bytes. Used for the tail of a failed signature run's
+// stderr, where the whole thing would bury the error that matters.
+func trunc(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

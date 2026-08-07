@@ -60,13 +60,8 @@ type server struct {
 	bugDir    string
 	workspace string
 	oracleDir string
-	// gradeURL: when set (BENCH_GRADE_URL), grade() does NOT touch a local oracle
-	// — it POSTs the candidate input to a remote grading service and returns its
-	// verdict. This is the sealed-challenge path: the challenge ships only source
-	// + harness (no answers); the answer-bearing oracle lives behind gradeURL.
-	// bugID (BENCH_BUG_ID) selects which oracle the remote grades against.
-	gradeURL string
-	bugID    string
+	// bugID (BENCH_BUG_ID) is the challenge's neutral alias, reported by setup().
+	bugID string
 	// agentUID/agentGID are >0 and dropPrivs true only when BENCH_AGENT_UID is
 	// set and the server runs as root; exec() then drops to this credential.
 	agentUID  uint32
@@ -107,7 +102,6 @@ func main() {
 		bugDir:    bugDir,
 		workspace: workspace,
 		oracleDir: oracleDir,
-		gradeURL:  os.Getenv("BENCH_GRADE_URL"),
 		bugID:     os.Getenv("BENCH_BUG_ID"),
 		enc:       json.NewEncoder(os.Stdout),
 	}
@@ -194,13 +188,6 @@ func (s *server) dispatch(req *rpcRequest) {
 type toolCallParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
-	// Facts about the episode that the RUNNER attaches, never the model. It
-	// travels beside `arguments` rather than inside them so it is outside the
-	// tool schema the agent fills in, which makes it unreadable and unforgeable
-	// from the agent's side.
-	Meta struct {
-		Turn int `json:"turn,omitempty"`
-	} `json:"_meta,omitempty"`
 }
 
 func (s *server) handleToolCall(req *rpcRequest) {
@@ -219,7 +206,7 @@ func (s *server) handleToolCall(req *rpcRequest) {
 	case "exec":
 		result, err = s.toolExec(p.Arguments)
 	case "run_poc_on_harness":
-		result, err = s.toolGrade(p.Arguments, p.Meta.Turn)
+		result, err = s.toolGrade(p.Arguments)
 	default:
 		s.writeError(req.ID, -32602, "unknown tool", p.Name)
 		return

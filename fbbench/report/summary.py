@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fbbench.grading.bugs import count as bug_count
-
 _TEMPLATE = Path(__file__).with_name("summary_template.html")
 _DIFFICULTY = Path(__file__).with_name("difficulty.json")
 LADDER = ["reach", "crash", "differential", "class", "site"]
@@ -114,12 +112,12 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
     cells = []
     cost_sum = 0.0
     cfg_seen: dict[str, set] = {}     # config key -> set of values seen across cells
-    # Signature -> frames, unioned across a pair's samples and across a
-    # challenge's models. Bug counts have to be computed on the UNION, not summed
-    # from the cells: two samples that hit the same defect two ways found one
-    # bug, and summing per-cell answers would count it twice.
-    pair_sigs: dict[tuple[str, str], dict[str, list]] = {}
-    challenge_sigs: dict[str, dict[str, list]] = {}
+    # The crash signatures seen, unioned across a pair's samples and across a
+    # challenge's models. Counted on the UNION, not summed from the cells: two
+    # samples that produced the same signature found one crash, and summing the
+    # per-cell answers would count it twice.
+    pair_sigs: dict[tuple[str, str], set[str]] = {}
+    challenge_sigs: dict[str, set[str]] = {}
     for bug in bugs:
         for model in models:
             for sample in samples:
@@ -145,25 +143,13 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                     cfg_seen.setdefault("image_pattern", set()).add(
                         _image_pattern(cfg["image"], bug))
                 report = cd / "report.html"
-                # Two different questions, two numbers. `crashes` counts the
-                # distinct ways this cell reached a fault; `bugs` counts the
-                # defects those faults point at. Recomputed here from the stored
-                # rows rather than read from score.json, so a rule change in
-                # fbbench.grading.bugs re-derives every past run's answer on the
-                # next report build — including runs made before the field
-                # existed, which have signatures but no frames.
                 sigs = sorted(sc.get("crash_signatures") or [])
-                frames = sc.get("crash_frames") or {}
-                cell_sigmap = {s: frames.get(s) or [] for s in sigs}
-                for s, fr in cell_sigmap.items():
-                    pair_sigs.setdefault((bug, model), {}).setdefault(s, fr)
-                    challenge_sigs.setdefault(bug, {}).setdefault(s, fr)
+                pair_sigs.setdefault((bug, model), set()).update(sigs)
+                challenge_sigs.setdefault(bug, set()).update(sigs)
                 cells.append({
                     "bug": bug, "model": model, "sample": sample,
                     "tier": int(sc.get("tier_score", 0)),
                     "crashes": int(sc.get("unique_crashes", 0)),
-                    # How many DEFECTS this cell's crashes point at.
-                    "bugs": bug_count(cell_sigmap),
                     # The signatures behind that count (crash type + top frames),
                     # so the page can dedupe across seeds and show WHAT was hit
                     # rather than only how many. The agent's own findings — see
@@ -204,29 +190,26 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "image": _agree("image_pattern"),
     }
 
-    # Per (challenge, model): the union across that pair's samples, clustered.
-    # Keyed with a separator no alias or model id contains, so the page can look
-    # a pair up without shipping a nested map.
-    pairs = {f"{b} {m}": {"crashes": len(sm), "bugs": bug_count(sm)}
+    # Per (challenge, model): the union across that pair's samples. Keyed with a
+    # separator no alias or model id contains, so the page can look a pair up
+    # without shipping a nested map.
+    pairs = {f"{b} {m}": {"crashes": len(sm)}
              for (b, m), sm in sorted(pair_sigs.items())}
-    # Sweep headline: per challenge, the union across every model, clustered.
-    # Two models that both found one defect found ONE bug on that challenge —
+    # Sweep headline: per challenge, the union across every model. Two models
+    # that produced the same signature reached ONE crash on that challenge —
     # summing the per-model answers would report two.
     totals = {
         "crashes": sum(len(sm) for sm in challenge_sigs.values()),
-        "bugs": sum(bug_count(sm) for sm in challenge_sigs.values()),
         "challenges_with_crashes": sum(1 for sm in challenge_sigs.values() if sm),
     }
 
     return {
         "exp": exp or exp_dir.name,
-        # The two measurements this page reports side by side, never one instead
-        # of the other: `crashes` = distinct ways a fault was reached (a real
-        # skill), `bugs` = distinct defects those faults point at (what a
-        # bug-finding benchmark is asking).
+        # What this page reports: `crashes` = the distinct crash signatures the
+        # agent produced, deduped over the samples and models that share a cell.
         "pairs": pairs,
         "totals": totals,
-        # Does ANY cell here carry an oracle ladder verdict? A sweep run entirely
+        # Does ANY cell here carry a ladder verdict? A sweep run entirely
         # against self-contained images does not, and the page uses this to show
         # what was measured (distinct crashes) instead of a grid of zeroes that
         # reads as five failed checks per cell.

@@ -6,8 +6,8 @@ There is one image per challenge:
 
 It carries its own sanitizer harness and grades every candidate inside the
 container, with no network. It has no answer key, so it computes no capability
-ladder and no ``solved`` — it counts distinct crashes, which
-:mod:`fbbench.grading.bugs` then groups into distinct bugs.
+ladder and no ``solved`` — it counts the distinct crash signatures the agent
+produced, and that count is the score.
 
 Nothing infers the grading mode from the tag. The image decides (mcp-server
 grades in-image when a harness is baked in) and the episode records which grader
