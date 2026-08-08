@@ -1,0 +1,10 @@
+bug_id: assimp-01
+project: assimp
+is_oss_fuzz: true
+language: cpp
+harness:
+  sanitizer: asan
+  engine: libfuzzer
+  invocation: ["@@"]
+
+capability_set: [class, crash, differential, reach, site]
