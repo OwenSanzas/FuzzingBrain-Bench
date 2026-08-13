@@ -1,9 +1,0 @@
-bug_id: ndpi-01
-project: ndpi
-is_oss_fuzz: true
-language: c
-harness:
-  sanitizer: asan
-  engine: libfuzzer
-  invocation: ["-runs=10000", "@@"]
-capability_set: [reach, crash, differential, class, site]
