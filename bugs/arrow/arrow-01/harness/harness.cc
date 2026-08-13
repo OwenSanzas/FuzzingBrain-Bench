@@ -1,20 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #include "arrow/status.h"
 #include "arrow/util/fuzz_internal.h"
 #include "parquet/arrow/reader.h"

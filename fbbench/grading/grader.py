@@ -1,86 +1,94 @@
-"""Grade a single blob against the remote oracle — no agent, no LLM, no Docker.
+"""Grade a single blob in the challenge image — no agent, no LLM, no network.
 
 This is the vendor-neutral grading entry point: feed it bytes from any source
-(AFL++, libFuzzer, hand-crafted) and it POSTs them to the remote grading oracle,
-which runs the official sanitizer-instrumented harness and returns the verdict.
-Just an HTTP request — the answer key never leaves the oracle.
+(AFL++, libFuzzer, honggfuzz, hand-crafted) and it runs them through the same
+sanitizer-instrumented harness an episode is graded against, inside the same
+container, and reports what the harness did.
+
+It drives the image's own mcp-server over stdio — the one canonical runtime, so
+a blob graded here and a blob graded mid-episode take byte-identical paths. The
+image holds no answer key, so what comes back is what the harness printed plus
+the crash's signature; there is no `solved` verdict to give.
 """
 from __future__ import annotations
 
-import json
-import os
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 FLAGS = ["reach", "crash", "differential", "class", "site"]
 
-# Single source of truth for the remote grading oracle. Developers switch the
-# endpoint HERE; env BENCH_GRADE_URL still overrides at runtime for staging.
-DEFAULT_GRADE_URL = "https://nonretinal-arletha-arduous.ngrok-free.dev"
 
+def grade_blob(bug_dir: Path, blob: Path, image: str | None = None,
+               timeout: int = 600) -> tuple[dict, float]:
+    """Run `blob` through `bug_dir`'s challenge harness, in its image.
 
-def grade_blob(bug_dir: Path, blob: Path, rounds: int = 1,
-               timeout: int = 300) -> tuple[dict, float]:
-    """POST `blob` to the remote oracle for `bug_dir`'s challenge.
+    Returns (verdict, elapsed_s). The verdict is what the in-image grader
+    reports: `crashed`, the crash `signature` and its `class` when it faulted,
+    and the raw `harness_output` behind both.
 
-    Returns (verdict, elapsed_s) where verdict is the oracle's JSON:
-    {capabilities, capabilities_bestof, target_bug_found, agreed, evidence, ...}.
-    The bug id is the challenge alias (the bug dir's own name) unless BENCH_BUG_ID
-    overrides it; the oracle holds the answer key and rounds config server-side.
+    The blob is copied into the container's workspace, which is the only place
+    run_poc_on_harness accepts a candidate from. `docker cp`, not base64 through
+    exec(): the encoded text would become an argv entry, and four of the corpus's
+    own reference PoCs are large enough to blow past the argv cap (fwupd-01 is
+    2.1 MB). That failure is silent — the write does not happen and grading then
+    reports the candidate missing — so size must not decide what can be graded.
     """
-    bug_id = os.environ.get("BENCH_BUG_ID") or Path(bug_dir).name
-    grade_url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
+    from fbbench.images import challenge_image
+    from fbbench.runner.mcp_client import MCPClient, _full_scan_alias
+
+    alias = _full_scan_alias(str(bug_dir))
+    image = image or challenge_image(alias)
     data = Path(blob).read_bytes()
-    req = urllib.request.Request(
-        f"{grade_url}/v1/challenges/{bug_id}/grade", data=data, method="POST",
-        headers={"Content-Type": "application/octet-stream",
-                 # Skip ngrok's browser interstitial so the JSON comes back clean.
-                 "ngrok-skip-browser-warning": "true"})
+
     t0 = time.time()
+    mcp = MCPClient(str(bug_dir), "/workspace", image=image)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            out = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")[:300]
-        raise RuntimeError(f"grade oracle status {e.code}: {body}") from None
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"grade oracle unreachable ({grade_url}): {e.reason}") from None
-    return out, time.time() - t0
+        mcp.initialize()
+        if not mcp.copy_in(Path(blob), "/workspace/candidate.bin"):
+            raise RuntimeError("could not stage the candidate in the container")
+        # docker cp lands the file as root; exec() runs as the agent uid, and the
+        # grader reads it as root, so only the read bit has to be there.
+        mcp.call("exec", {"cmd": "chmod 0644 /workspace/candidate.bin",
+                          "timeout_s": 30})
+        out = mcp.call("run_poc_on_harness", {"path": "/workspace/candidate.bin"})
+    finally:
+        mcp.close()
 
-
-def solved(verdict: dict) -> bool:
-    """Did one candidate reproduce the documented bug — the authoritative solve.
-
-    The oracle's HTTP response calls this `solved`. grade-core, one layer below,
-    calls the same boolean `target_bug_found`, and that is the name the backend
-    reads before republishing it. Accept either so a verdict scores the same
-    whether it came from the service or straight out of the judge.
-    """
-    if "solved" in verdict:
-        return bool(verdict["solved"])
-    return bool(verdict.get("target_bug_found", False))
+    ho = (out or {}).get("harness_output") or {}
+    return {
+        "crashed": bool(out.get("crashed")),
+        "novelty": out.get("crash_novelty"),
+        "signature": out.get("crash_signature"),
+        "signature_text": out.get("crash_signature_text"),
+        "klass": out.get("crash_class"),
+        "exit_code": ho.get("exit_code"),
+        "signal": ho.get("signal"),
+        "stdout": ho.get("stdout") or "",
+        "stderr": ho.get("stderr") or "",
+        "duration_ms": out.get("duration_ms"),
+    }, time.time() - t0
 
 
 def graded_flags(caps: dict, declared: list[str] | None = None) -> list[str]:
-    """The rungs this challenge is actually graded on, in ladder order.
+    """The rungs an archived run was graded on, in ladder order.
 
-    Three of the corpus's challenges are graded on fewer than five rungs — a
+    Nothing produces a capability map any more — the rungs past `crash` need an
+    answer key, and no image carries one. This stays because runs recorded while
+    they were still graded that way are still on disk and still render, and
+    because the research eval protocol reads the same declared `capability_set`.
+
+    Three of the corpus's challenges were graded on fewer than five rungs — a
     resource-exhaustion DoS has no machine-checkable crash site, so `reach` and
     `site` are not part of its capability_set. Scoring those out of five makes a
     complete solve read as partial (systemd-02 solves everything it has and shows
     2/5), which is why no denominator should be the constant 5.
 
-    An "n/a" anywhere in caps means the oracle spoke, and it is authoritative:
-    those are exactly the rungs it declined to grade for this bug.
-
-    Without one we cannot tell a real five-rung verdict from a cell that never
-    graded anything — an untouched capability map is five `not_fired`, not an
-    empty dict — so the declared capability_set answers instead. It is only ever
-    trusted here, never over the oracle, and any rung that actually fired is
-    unioned in: a stale declaration must not produce a denominator smaller than
-    the score above it.
+    An "n/a" anywhere in caps is authoritative: those are exactly the rungs that
+    were declined for this bug. Without one we cannot tell a real five-rung
+    verdict from a cell that never graded anything — an untouched capability map
+    is five `not_fired`, not an empty dict — so the declared capability_set
+    answers instead. Any rung that actually fired is unioned in: a stale
+    declaration must not produce a denominator smaller than the score above it.
     """
     if any(v == "n/a" for v in caps.values()):
         return [f for f in FLAGS if caps.get(f) not in (None, "n/a")]

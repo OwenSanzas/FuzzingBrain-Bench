@@ -8,3 +8,5 @@ harness:
   invocation:
   - -rss_limit_mb=4096
   - '@@'
+
+capability_set: [reach, crash, differential, class, site]

@@ -7,3 +7,5 @@ harness:
   engine: jazzer
   invocation:
   - '@@'
+
+capability_set: [reach, crash, differential, class, site]

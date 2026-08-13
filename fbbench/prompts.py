@@ -218,7 +218,7 @@ Build environment (how the input you submit is compiled and judged):
         "and judged under, so it is given as structured fields (not prose). "
         "architecture / system / toolchain are the container's own environment (the "
         "agent could probe them); the sanitizer + build flags describe the GRADED "
-        "binary, which lives on the remote oracle and cannot be probed — so they must "
+        "binary, which is not readable from inside the episode — so they must "
         "be stated. The specific crash CLASS is still never named (that is the "
         "capability under test; naming ASan/UBSan does not reveal which class fired).",
     fills="sanitizer (display + token) and reports (the fault family it detects), "

@@ -45,8 +45,8 @@ def sig_rules_args() -> list[str]:
 
     Two things this does NOT cover, both by nature. An image driven directly by
     an external user gets its baked copy — nothing here runs for them. And the
-    remote grading backend keeps its own copy, so the two still have to be moved
-    together; this only removes the image from that list.
+    baked copy is what an external user gets, so the two still have to be moved
+    together; this only removes runner-driven episodes from that list.
 
     Set BENCH_SIG_SCRIPT on the host to override (including to the baked path,
     to measure exactly what an external user would get).
@@ -79,84 +79,36 @@ def _full_scan_alias(real_bug_dir: str) -> str:
     return f"{project}-{idx:02d}"
 
 
-def run_env_args(run: dict[str, str] | None) -> list[str]:
-    """`docker run` -e flags carrying this episode's identity into the container.
-
-    The in-image mcp-server reads these and forwards them to the oracle as
-    FB-Run-* headers, which is how one run's twenty submissions are told apart
-    from twenty runs' one each. Passed as container environment, never through
-    the tool surface: the agent has no way to read or forge them, and no part of
-    the challenge changes because they are set.
-
-    Shared so the api arm and the vendor arms cannot drift on the variable names.
-    """
-    args: list[str] = []
-    for key, value in (run or {}).items():
-        if value:
-            args += ["-e", f"BENCH_RUN_{key.upper()}={value}"]
-    return args
-
-
 class MCPClient:
-    def __init__(self, bug_dir: str, workspace: str, *, image: str,
-                 run: dict[str, str] | None = None):
+    def __init__(self, bug_dir: str, workspace: str, *, image: str):
         # Drive the PUBLIC challenge image's own mcp-server over stdio. The
-        # challenge surface + BENCH_* (incl. the remote BENCH_GRADE_URL) are baked
-        # into the image, so what we measure is byte-identical to what any external
-        # user runs. The container is ephemeral (--rm) and self-contained.
+        # challenge surface + BENCH_* are baked into the image, so what we measure
+        # is byte-identical to what any external user runs. The container is
+        # ephemeral (--rm) and self-contained.
         #
         # seccomp=unconfined lets the in-container mcp-server create the user+network
         # namespace exec() isolation needs (default Docker seccomp blocks
-        # unshare(CLONE_NEWUSER)). exec'd children still get `-n` (no network — they
-        # cannot brute-force the remote oracle); the server's own run_poc_on_harness() call keeps
-        # the container's network. The container is ephemeral and answer-free, so
-        # this leaks nothing. BENCH_GRADE_REVEAL=1 marks the TRUSTED runner: the
-        # in-image mcp-server returns the verdict so the runner can score, then
-        # strips it before the model sees the grade result. --cidfile lets us
-        # `docker cp` grade candidates out of the live container.
+        # unshare(CLONE_NEWUSER)). exec'd children still get `-n`, so the agent's
+        # shell cannot fetch the upstream issue or a reference PoC. The container
+        # is ephemeral and answer-free, so this leaks nothing. BENCH_GRADE_REVEAL=1
+        # marks the TRUSTED runner: the in-image grader returns the crash
+        # signature so the runner can score, and the seal strips it before the
+        # model sees the grade result. --cidfile lets us `docker cp` grade
+        # candidates out of the live container.
         env = os.environ.copy()
         self._image = image
         self._cid_dir = tempfile.mkdtemp(prefix="fbcid-")
         self._cidfile = os.path.join(self._cid_dir, "cid")
         cmd = ["docker", "run", "-i", "--rm",
-               # Always fetch the latest published image. Without this, a stale
-               # locally-cached <image>:latest is reused silently — and an old
-               # image bakes an old mcp-server that still POSTs the retired
-               # /grade?bug= endpoint (now 404). --pull=always keeps the baked
-               # grade client in sync with the backend.
+               # Always fetch the latest published image. Without this a stale
+               # locally-cached <image>:latest is reused silently, and a stale
+               # image bakes a stale harness and a stale grader — so a run would
+               # be scored by rules nobody could see from this checkout.
                "--pull=always",
                "--cidfile", self._cidfile,
                "--security-opt", "seccomp=unconfined",
                "-e", "BENCH_GRADE_REVEAL=1"]
-        # Send grades somewhere other than the endpoint the image was baked
-        # with, when the operator names one. mcp-server reads BENCH_GRADE_URL at
-        # run time, so this redirects a published image without rebaking it --
-        # which is what makes a local grading backend possible at all.
-        #
-        # Conditional on purpose. Unset means the argument is not passed and the
-        # image keeps its own value, so an external user, and any run that does
-        # not opt in, is bit-for-bit unaffected. Passing a default here instead
-        # would repeat a failure this repo has already had: a local address
-        # shipped as the default made every published image unable to grade, and
-        # nothing raised -- the requests simply went nowhere.
-        #
-        # A localhost/127.0.0.1 URL is the one value that cannot be passed
-        # through as written: inside the container it means the CONTAINER, so a
-        # backend running on the host is unreachable and the grade silently goes
-        # nowhere -- the same failure as above, arriving by a different route.
-        # Rewriting it to the host-gateway alias, and publishing that alias, is
-        # what makes "point it at my laptop" work. Other hosts pass through
-        # untouched.
-        grade_url = os.environ.get("BENCH_GRADE_URL")
-        if grade_url:
-            for local in ("127.0.0.1", "localhost"):
-                if local in grade_url:
-                    grade_url = grade_url.replace(local, "host.docker.internal")
-                    cmd += ["--add-host", "host.docker.internal:host-gateway"]
-                    break
-            cmd += ["-e", f"BENCH_GRADE_URL={grade_url}"]
         cmd += sig_rules_args()
-        cmd += run_env_args(run)
         cmd += [image, "mcp-server"]
         bug_dir, workspace = "/src", "/workspace"
         self._proc = subprocess.Popen(
@@ -186,19 +138,10 @@ class MCPClient:
     def list_tools(self) -> list[dict]:
         return self._call("tools/list", {})["tools"]
 
-    def call(self, name: str, arguments: dict, meta: dict | None = None) -> Any:
-        """Invoke a tool. `meta` rides alongside the call rather than inside it.
-
-        `arguments` is what the model produced and is bound by the tool's schema.
-        `_meta` is added here, after the model is done, so the agent can neither
-        read it nor set it — which is the whole point: it carries facts about the
-        episode (which turn this is) that the oracle wants and the agent must not
-        be able to forge.
-        """
+    def call(self, name: str, arguments: dict) -> Any:
+        """Invoke a tool with the arguments the model produced."""
         arguments = self._clamp_exec_timeout(name, arguments)
         params: dict = {"name": name, "arguments": arguments}
-        if meta:
-            params["_meta"] = meta
         resp = self._call("tools/call", params)
         return resp.get("structuredContent", resp)
 
@@ -218,6 +161,33 @@ class MCPClient:
         try:
             r = subprocess.run(["docker", "cp", f"{cid}:{path}", str(dest)],
                                capture_output=True, timeout=30)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def copy_in(self, src, path: str) -> bool:
+        """`docker cp` a file from the host INTO the live container's workspace.
+
+        The obvious way to stage a candidate is to base64 it into an exec()
+        command, and that works right up until the blob is big: the encoded text
+        becomes an argv entry, and argv is capped. Four of the corpus's own
+        reference PoCs are over 400 KB (fwupd-01 is 2.1 MB), and every one of
+        them failed with "argument list too long" — the write silently did not
+        happen and grading then reported the candidate missing. Size must not
+        decide whether an input can be graded, so the bytes travel as a file.
+        """
+        if not self._cidfile:
+            return False
+        try:
+            with open(self._cidfile) as f:
+                cid = f.read().strip()
+        except OSError:
+            return False
+        if not cid:
+            return False
+        try:
+            r = subprocess.run(["docker", "cp", str(src), f"{cid}:{path}"],
+                               capture_output=True, timeout=120)
             return r.returncode == 0
         except Exception:
             return False

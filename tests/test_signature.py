@@ -244,13 +244,29 @@ def main() -> int:
         # is the trade -- two genuinely different faults in one long function
         # now share an identity.
         ("two offsets in one function are one crash", _GRADED_REMOTE, _GRADED_OTHER_SITE),
-        ("one crash, graded remotely and in-image", _GRADED_REMOTE, _GRADED_IN_IMAGE),
-        # ABRT, not stack-overflow: caught by the frames, not by the class name.
-        ("one cycle, two blow-up points", _CYCLE_FROM_ARRAY, _CYCLE_FROM_VALUE),
+        ("one crash, graded in two runs", _GRADED_REMOTE, _GRADED_IN_IMAGE),
     ):
         same = signature(a).canon_sig == signature(b).canon_sig
         ok = ok and same
         print(f"  [{'PASS' if same else 'FAIL'}] {name}")
+
+    # One cycle blowing up at two points is TWO signatures, and that is the
+    # accepted cost of having a single naming rule.
+    #
+    # There was a second rule that sorted the whole stack so a cycle signed the
+    # same wherever it died. It never fired on any of the 68 reference crashes,
+    # and where it did fire it was wrong: a use-after-free report carries the
+    # fault, free and allocation stacks, and the callers they share read as
+    # recursion — libxml2-04 faults at xmlIsID and was signing as xmlFreeNode,
+    # naming where memory was freed instead of the defect. Two unrelated defects
+    # freed by the same cleanup function collapsed into one crash.
+    #
+    # Overcounting a cycle costs the agent nothing it earned; undercounting a
+    # use-after-free costs it a find. Pinned so the trade stays deliberate.
+    split_cycle = (signature(_CYCLE_FROM_ARRAY).canon_sig
+                   != signature(_CYCLE_FROM_VALUE).canon_sig)
+    ok = ok and split_cycle
+    print(f"  [{'PASS' if split_cycle else 'FAIL'}] one cycle, two blow-up points, two signatures")
 
     # sig_text is what a human reads when a count looks wrong, so it has to be a
     # rendering of the hashed keys and not a second, looser reduction of them.

@@ -5,17 +5,18 @@ After a sweep, :func:`write_summary` injects a params+results blob into
 matrix of every (bug x model) cell, each linking to that episode's own report.
 
 ANSWER SAFETY: the summary reads only each cell's ``score.json`` (the agent's
-achieved tier + which ladder flags fired + cost + terminated reason). It never
-opens ``expected.yaml`` / ``poc`` / a description, and emits no bug class or
-crash location. "solved" is derived purely from the cell's own capabilities
-(every applicable, non-``n/a`` flag fired) — so no answer key is consulted.
+achieved tier + which ladder flags fired + its own crash signatures + cost +
+terminated reason). It never opens ``expected.yaml`` / ``poc`` / a description,
+and emits no bug class or crash location. "solved" is derived purely from the
+cell's own capabilities (every applicable, non-``n/a`` flag fired) — so no
+answer key is consulted. Crash signatures are the AGENT's findings, distilled
+from harness output it had already seen; they say what it hit, never what it was
+supposed to hit.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-
-from fbbench.grading import pool
 
 _TEMPLATE = Path(__file__).with_name("summary_template.html")
 _DIFFICULTY = Path(__file__).with_name("difficulty.json")
@@ -55,6 +56,28 @@ def _solved(sc: dict) -> bool:
     return bool(applicable) and all(v == "fired" for v in applicable.values())
 
 
+def _image_pattern(image: str, alias: str) -> str:
+    """One challenge's image ref with its own alias collapsed to a placeholder.
+
+    A sweep runs 68 different images, so their full refs never agree and reporting
+    "mixed" would be useless. Replacing just the alias leaves exactly what they DO
+    share — registry, repository and tag —
+
+        docker.io/osanzas/fbbench-challenge-avro-03:latest
+        -> docker.io/osanzas/fbbench-challenge-<alias>:latest
+
+    so a sweep whose challenges came from one place shows one value, and one that
+    mixed registries or tags still says "mixed" honestly.
+
+    The name, not the tag: since :latest became the self-contained image the tag
+    says nothing about how a run was graded, and `grading` reports that from what
+    the run observed. What the name still answers is "which artifact produced
+    this", which is the reproducibility question.
+    """
+    named = image.replace(alias, "<alias>") if alias else image
+    return named if ":" in named.rpartition("/")[2] else named + ":latest (implicit)"
+
+
 def _scan_dimensions(exp_dir: Path) -> tuple[list[str], list[str], list[int]]:
     """Infer (bugs, models, samples) from the on-disk cell tree."""
     bugs, models, samples = [], set(), set()
@@ -86,17 +109,15 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
 
     difficulty, max_score = _load_difficulty()
 
-    # Unique crashes come from the oracle: it is the only side that can tell one
-    # crash from another, and a runner that could would be able to leak it into
-    # the episode. Safe to read HERE — a summary is built after every episode has
-    # ended. None when there is no batch id or the oracle is unreachable, which
-    # the template renders as absent rather than as zero.
-    uid = pool.batch_uid(exp_dir)
-    crash_score = pool.batch_score(uid) if uid else None
-    crashes_by_cell = pool.per_challenge_crashes(crash_score)
     cells = []
     cost_sum = 0.0
     cfg_seen: dict[str, set] = {}     # config key -> set of values seen across cells
+    # The crash signatures seen, unioned across a pair's samples and across a
+    # challenge's models. Counted on the UNION, not summed from the cells: two
+    # samples that produced the same signature found one crash, and summing the
+    # per-cell answers would count it twice.
+    pair_sigs: dict[tuple[str, str], set[str]] = {}
+    challenge_sigs: dict[str, set[str]] = {}
     for bug in bugs:
         for model in models:
             for sample in samples:
@@ -113,23 +134,30 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                     if isinstance(v, (list, dict)):
                         continue
                     cfg_seen.setdefault(k, set()).add(v)
+                # Derived, and it has to be derived HERE: every bug has its own
+                # image, so the full refs never agree — it is the tag they share.
+                if cfg.get("image"):
+                    # Under its own key: the generic loop above already collected
+                    # the 68 raw refs under "image", and adding the pattern there
+                    # would make every sweep disagree with itself.
+                    cfg_seen.setdefault("image_pattern", set()).add(
+                        _image_pattern(cfg["image"], bug))
                 report = cd / "report.html"
-                cell_crashes = crashes_by_cell.get((model, bug))
+                sigs = sorted(sc.get("crash_signatures") or [])
+                pair_sigs.setdefault((bug, model), set()).update(sigs)
+                challenge_sigs.setdefault(bug, set()).update(sigs)
                 cells.append({
                     "bug": bug, "model": model, "sample": sample,
                     "tier": int(sc.get("tier_score", 0)),
-                    # This cell's own count, from its score.json. `uniq_crashes`
-                    # below comes from the oracle's pool and is None when there
-                    # is no oracle to ask — which is exactly the locally-graded
-                    # case, so the two are kept apart rather than merged.
                     "crashes": int(sc.get("unique_crashes", 0)),
+                    # The signatures behind that count (crash type + top frames),
+                    # so the page can dedupe across seeds and show WHAT was hit
+                    # rather than only how many. The agent's own findings — see
+                    # the answer-safety note at the top of this module.
+                    "sigs": sigs,
                     # Whether this cell was graded against the capability ladder
                     # at all. False for in-image grading, which has no answer key.
                     "has_ladder": bool(caps),
-                    # Distinct crashes this cell produced; None when unknown.
-                    "uniq_crashes": cell_crashes["crashes"] if cell_crashes else None,
-                    "uniq_unpatched": (cell_crashes["unpatched_upstream"]
-                                       if cell_crashes else None),
                     "d": int(difficulty.get(bug, 0)),  # published difficulty 1..5
                     "caps": caps,
                     "solved": _solved(sc),
@@ -149,16 +177,39 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
     config = {
         "mode": _agree("mode", "blind"),
         "max_turns": _agree("max_turns", max_turns),
+        "timeout_s": _agree("timeout_s"),
         "stop_on_solve": _agree("stop_on_solve"),
         "preserve_pocs": _agree("preserve_pocs"),
         # No default: a sweep whose cells disagree, or that recorded nothing,
         # should say so rather than inherit a claim about how it was graded.
         "grading": _agree("grading"),
+        # WHICH ARTIFACT produced these numbers. Not the tag: the tag no longer
+        # selects a grading mode (see fbbench.images), so a bare "latest" would
+        # answer nothing a reader needs. A sweep whose bugs pin their own images
+        # reads "mixed", which is true.
+        "image": _agree("image_pattern"),
+    }
+
+    # Per (challenge, model): the union across that pair's samples. Keyed with a
+    # separator no alias or model id contains, so the page can look a pair up
+    # without shipping a nested map.
+    pairs = {f"{b} {m}": {"crashes": len(sm)}
+             for (b, m), sm in sorted(pair_sigs.items())}
+    # Sweep headline: per challenge, the union across every model. Two models
+    # that produced the same signature reached ONE crash on that challenge —
+    # summing the per-model answers would report two.
+    totals = {
+        "crashes": sum(len(sm) for sm in challenge_sigs.values()),
+        "challenges_with_crashes": sum(1 for sm in challenge_sigs.values() if sm),
     }
 
     return {
         "exp": exp or exp_dir.name,
-        # Does ANY cell here carry an oracle ladder verdict? A sweep run entirely
+        # What this page reports: `crashes` = the distinct crash signatures the
+        # agent produced, deduped over the samples and models that share a cell.
+        "pairs": pairs,
+        "totals": totals,
+        # Does ANY cell here carry a ladder verdict? A sweep run entirely
         # against self-contained images does not, and the page uses this to show
         # what was measured (distinct crashes) instead of a grid of zeroes that
         # reads as five failed checks per cell.
@@ -171,14 +222,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "total_cost": total_cost if total_cost is not None else cost_sum,
         "elapsed_s": elapsed_s,
         "max_score": max_score,
-        # The legacy difficulty score (out of max_score) is kept alongside this
-        # one, not replaced: it is the number every earlier result is expressed
-        # in, and dropping it would make this run incomparable with all of them.
-        "crash_score": ({
-            "batch_uid": crash_score.get("batch_uid"),
-            "cap_per_challenge": crash_score.get("cap_per_challenge"),
-            "models": crash_score.get("models", []),
-        } if crash_score else None),
         "cells": cells,
     }
 

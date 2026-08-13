@@ -98,8 +98,8 @@ func (s *server) toolExec(args []byte) (any, error) {
 	if s.netIsolate {
 		inner := `exec /bin/bash -c "$BENCH_USER_CMD"`
 		// -r (userns) + -n (no network) are ALWAYS applied: the agent's shell
-		// must never reach the network — otherwise it could brute-force the
-		// remote oracle or fetch upstream material. This matches probeNetNS().
+		// must never reach the network — otherwise it could fetch the upstream
+		// issue, the fix commit, or a reference PoC. Matches probeNetNS().
 		nsArgs := []string{"-r", "-n"}
 		// A private mount namespace (-m) tmpfs-masks the oracle dir, and is added
 		// ONLY when there is a distinct oracle dir AND no better way to hide it.

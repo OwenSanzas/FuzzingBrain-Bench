@@ -11,17 +11,13 @@ index (kept named `seed-N` for back-compat with the legacy 518-row dataset).
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
-import urllib.request
-import uuid
 from pathlib import Path
 
-from fbbench.grading import pool
 from fbbench.grading import (
-    DEFAULT_GRADE_URL, DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
+    DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
 )
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
@@ -59,8 +55,8 @@ def cell_dir(out: Path, bug: str, model: str, sample: int) -> Path:
 
     Keeps the legacy `seed-N` directory naming for back-compat with the
     518 existing data points. It still does not drive sampling — it is which
-    repeat this is, forwarded to the runner as --seed so the oracle can tell
-    one cell's repeats apart in its own records."""
+    repeat this is, forwarded to the runner as --seed so one cell's repeats
+    can be told apart."""
     return out / bug / model / f"seed-{sample}"
 
 
@@ -99,7 +95,6 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              seed: int | None = None, batch: str | None = None,
              preserve_pocs: bool = True, stop_on_solve: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
-             image_tag: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
     truth so the single and multi paths forward the SAME per-cell flags."""
@@ -118,22 +113,20 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
         cmd += ["--api-key", api_key]
     if image_prefix:
         cmd += ["--image-prefix", image_prefix]
-    if image_tag:
-        cmd += ["--image-tag", image_tag]
     return cmd
 
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
              stop_on_solve: bool = False, api_key: str | None = None,
-             image_prefix: str | None = None, image_tag: str | None = None,
+             image_prefix: str | None = None,
              runner: list[str] | None = None,
              batch: str | None = None) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
                    seed=sample, batch=batch,
                    preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag,
+                   api_key=api_key, image_prefix=image_prefix,
                    runner=runner)
     try:
         # The episode self-stops at `timeout`; SIGKILL only if it overruns the
@@ -147,13 +140,6 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
 
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
-    # Unique crashes are counted by the oracle, which is the only side that knows
-    # which crashes are the same one. Absent (no batch id, oracle unreachable)
-    # the column is left blank rather than zeroed — zero would be a claim about
-    # the run, and this is a claim about the lookup.
-    uid = pool.batch_uid(out)
-    crash_score = pool.batch_score(uid) if uid else None
-    by_model = {m["model"]: m for m in (crash_score or {}).get("models", [])}
 
     # The five-rung ladder is the ORACLE's verdict. A locally-graded sweep never
     # computes it, and printing five zero columns would read as "the model failed
@@ -209,8 +195,7 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 agg[k] += int(caps[k])
             if bug_solved:
                 solved += 1
-        cs = by_model.get(model)
-        uniq = f"{cs['crashes_found']}" if cs else f"{crashes}"
+        uniq = f"{crashes}"
         if graded_ladder:
             print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
                   f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
@@ -220,41 +205,6 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
             # is left is how many challenges the model was run against.
             print(f"  {model:24s} {uniq:>7s} {n:>7d} {refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
-    if crash_score is None:
-        # Only worth saying when the oracle was the ONLY possible source. A
-        # locally-graded sweep counts its own crashes and just printed them, so
-        # announcing they are unavailable directly contradicts the table above.
-        if graded_ladder:
-            print("  (uniqCr from the oracle unavailable: no batch id recorded, or the "
-                  "oracle could not be reached — counts above are the cells' own)")
-    else:
-        for m in crash_score.get("models", []):
-            print(f"  {m['model']}: {m['crashes_found']} distinct crashes over "
-                  f"{m['challenges']} challenge(s) — {m['preset_solved']} preset, "
-                  f"{m['off_target']} off-target ({m['unpatched_upstream']} still crash the fixed build)")
-
-
-def register_batch(name: str, params: dict) -> str:
-    """Mint an id for this sweep and tell the oracle what flags defined it.
-
-    Returns the id whether or not registration succeeded. Best-effort on purpose:
-    a sweep that cannot reach the grader should still run — it loses the ability
-    to explain its own numbers later, which is worse than not running only if you
-    squint. The cells carry the id regardless, so the grades still group.
-    """
-    batch_uid = uuid.uuid4().hex
-    url = os.environ.get("BENCH_GRADE_URL", DEFAULT_GRADE_URL).rstrip("/")
-    body = json.dumps({"batch_uid": batch_uid, "name": name, "params": params}).encode()
-    req = urllib.request.Request(
-        f"{url}/v1/batches", data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "ngrok-skip-browser-warning": "true"})
-    try:
-        urllib.request.urlopen(req, timeout=30).close()
-    except Exception as e:  # noqa: BLE001 — nothing here is worth failing a sweep for
-        print(f"  note: could not register this batch ({e}); results will still group "
-              f"under {batch_uid[:12]} but their flags will not be recorded")
-    return batch_uid
 
 
 def _write_summary(out: Path, models: list[str], bugs: list[str], seeds: list[int],
@@ -276,8 +226,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                jobs: int = 1, dashboard_pref: bool | None = None,
                preserve_pocs: bool = True, stop_on_solve: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
-               image_tag: str | None = None,
-               report_only: bool = False, runner: list[str] | None = None,
+                 report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
                model_map: dict[str, str] | None = None) -> int:
     """THE engine: run the (models x bugs x samples) matrix. One code path for
@@ -329,30 +278,10 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
           f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
 
-    # One id for the whole matrix, so every grade it produces rolls up to the
-    # flags that defined it. A resumed sweep gets a NEW id: it is a different
-    # experiment in wall-clock terms even when the cells are the same.
-    #
-    # Skipped entirely for a locally-graded sweep. The id exists so the ORACLE
-    # can group the submissions it receives, and a self-contained image sends it
-    # none — so registering was a network round trip whose only visible effect
-    # was a 404 warning about grouping that was never going to happen.
-    local_grading = (image_tag or "latest") != "latest"
-    batch_uid = "" if local_grading else register_batch(out.name, {
-        "models": models, "bugs": len(bugs), "samples": samples,
-        "max_turns": max_turns, "timeout": timeout, "jobs": jobs, "arm": arm,
-        "stop_on_solve": stop_on_solve, "output": str(out),
-    })
-    # Persist it so `--report-only` months later can still ask the oracle what
-    # this sweep found. Without it the id lives only in the cells' score.json,
-    # and a report over a partially-deleted output tree loses the batch entirely.
-    #
-    # The tree is created here rather than left to the first cell: this is now
-    # the first write into it, and every cell dir is nested under it. Without
-    # this a fresh --output aborts the whole sweep before a single episode runs.
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "batch.json").write_text(json.dumps(
-        {"batch_uid": batch_uid, "name": out.name}, indent=2) + "\n")
+    # No batch id. It existed to group submissions on a grading service that no
+    # longer takes any — every image grades in-image — and nothing in the report
+    # depends on the grouping.
+    batch_uid = ""
 
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
@@ -371,14 +300,16 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
                      max_turns=max_turns, total=len(cells), already_done=done,
-                     expect_ladder=(image_tag or "latest") == "latest")
+                     # No image computes a ladder — the rungs past `crash` need
+                     # an answer key and none ships one.
+                     expect_ladder=False)
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME
         # cell dir, so resume / aggregate / report downstream are arm-agnostic.
         #
-        # Isolate per-cell failures: an arm that RAISES (e.g. the grade oracle is
-        # unreachable, per _best_caps) must NOT kill the whole matrix — otherwise a
+        # Isolate per-cell failures: an arm that RAISES (e.g. grading a candidate
+        # blob failed, per codex._crash_signatures) must NOT kill the matrix — a
         # single bad cell discards the aggregate + report for every cell that DID
         # finish. Catch it, record the error, and let the run continue. No score.json
         # is written on the failing path (the arms write it only after grading), so
@@ -398,7 +329,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
-                            api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner,
+                            api_key=api_key, image_prefix=image_prefix, runner=runner,
                             batch=batch_uid)
         except Exception as e:  # noqa: BLE001
             import traceback
@@ -410,7 +341,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
 
     if jobs > 1:
         # Parallel: each cell is an independent subprocess + Docker container,
-        # graded independently by the remote oracle, so concurrency is safe.
+        # grading inside its own, so concurrency is safe.
         from concurrent.futures import ThreadPoolExecutor
 
         todo = [(i, m, b, s) for i, (m, b, s) in enumerate(cells, 1)
@@ -447,7 +378,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                    seed=sample, batch=batch_uid,
                                    preserve_pocs=preserve_pocs,
                                    stop_on_solve=stop_on_solve,
-                                   api_key=api_key, image_prefix=image_prefix, image_tag=image_tag, runner=runner)
+                                   api_key=api_key, image_prefix=image_prefix, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
                     STATUS.cell_finish(model, bug, sample, r)
