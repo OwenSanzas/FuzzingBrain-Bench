@@ -1,10 +1,14 @@
 {
-  "wire_ok": [],
-  "wire_fail": [],
+  "ok": [
+    "avro-03",
+    "libxml2-04",
+    "net-snmp-03",
+    "pdfbox-02",
+    "graaljs-01",
+    "arrow-01"
+  ],
   "leak": [],
   "no_image": [],
-  "no_poc": [
-    "avro-03"
-  ],
-  "private_endpoint": []
+  "not_self_contained": [],
+  "grade_fail": []
 }

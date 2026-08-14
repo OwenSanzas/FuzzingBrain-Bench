@@ -77,8 +77,8 @@ class Cell:
     solved_val: bool | None = None  # authoritative solve (score.solved); None = unknown
     tier: int = 0
     crashes: int = 0                # distinct crashes this cell produced
-    # Whether an ORACLE ladder verdict exists for this cell. None until it
-    # finishes; False for in-image grading, which never computes one.
+    # Whether a ladder verdict exists for this cell. None until it finishes;
+    # False for everything current — no image computes one.
     has_ladder: bool | None = None
     cost: float = 0.0
     reason: str = ""                # terminated_reason
@@ -146,13 +146,13 @@ class SweepStatus:
 
     @property
     def show_ladder(self) -> bool:
-        """Whether this sweep has an oracle ladder to show.
+        """Whether this sweep has a ladder to show — archived runs only.
 
-        Answered by the cells once any has finished — a locally-graded run
-        records no capabilities, and five dim rungs plus "0/5" would read as a
-        sweep that failed everything rather than one that measured distinct
-        crashes. Until then it falls back to what the image tag implied, so the
-        table does not change shape halfway through for the common case.
+        Answered by the cells once any has finished. A current run records no
+        capabilities, and five dim rungs plus "0/5" would read as a sweep that
+        failed everything rather than one that measured distinct crashes. Until
+        then it falls back to the opening expectation, so the table does not
+        change shape halfway through.
         """
         seen = [c.has_ladder for c in self._cells.values() if c.has_ladder is not None]
         return any(seen) if seen else getattr(self, "expect_ladder", True)

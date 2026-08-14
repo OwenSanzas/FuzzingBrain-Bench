@@ -1,8 +1,3 @@
-
-
-
-
-
 #include <cstring>
 
 #include "fuzzer_utils.h"

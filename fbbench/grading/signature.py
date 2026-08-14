@@ -562,11 +562,24 @@ def signature(harness_output: dict) -> Signature | None:
 
     all_frames = _all_frames(text)
     frames = all_frames[:KEEP_FRAMES]
-    # A cycle is identified from the WHOLE stack, not from the stored window:
-    # the window holds whichever turn of the cycle was on top when the stack
-    # ran out, which is the thing that has to stop mattering.
-    cyclic = _is_cyclic(all_frames)
-    keys = _frame_keys(all_frames if cyclic else frames, klass, cyclic=cyclic)
+    # ONE rule: the top KEEP_FRAMES frames name the crash, whatever the class.
+    #
+    # There used to be a second rule for recursion, keyed off the sorted whole
+    # stack so that a cycle would not sign differently depending on which turn
+    # of it happened to be on top. It never fired on any of the corpus's own
+    # reference crashes -- all 67 signable ones are byte-identical without it --
+    # and it misfired badly on the ones it did reach. A use-after-free report
+    # carries THREE stacks (the fault, the free, the allocation), _all_frames
+    # concatenates them, and the callers they share look exactly like recursion:
+    # libxml2-04 faults at xmlIsID and signed as xmlFreeNode|xmlFreeNs|
+    # xmlFreeNsList, naming where the memory was freed rather than the defect.
+    # Two unrelated defects freed by the same cleanup function then collapse into
+    # one crash, which costs the agent a find.
+    #
+    # It also made `frames` and `canon_sig` disagree: the stored frames were the
+    # fault stack while the identity came from somewhere else in the report.
+    # They are now the same list.
+    keys = _frame_keys(frames, klass, cyclic=False)
 
     # The identity IS the joined string — "class|f1|f2|f3" — not a digest over
     # it. A reader can see which crash a run found without a lookup, which is

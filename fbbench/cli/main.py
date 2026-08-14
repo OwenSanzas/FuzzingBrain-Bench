@@ -5,12 +5,13 @@ import argparse
 import sys
 
 from fbbench.cli import commands
+from fbbench.images import DEFAULT_IMAGE_PREFIX
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="fb-bench",
-        description="FuzzingBrain Bench CLI — grade blobs against real-bug oracles.",
+        description="FuzzingBrain Bench CLI — drive agents through real-bug challenges.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -22,11 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp_show.set_defaults(fn=commands.cmd_show)
 
     sp_grade = sub.add_parser("grade",
-                              help="grade an input file against a bug's remote oracle (no LLM)")
+                              help="run an input file through a bug's harness, in its image (no LLM)")
     sp_grade.add_argument("bug_id")
     sp_grade.add_argument("blob", help="path to the input file to grade")
     sp_grade.add_argument("-v", "--verbose", action="store_true",
-                          help="print oracle evidence")
+                          help="print the harness stdout as well as stderr")
     sp_grade.set_defaults(fn=commands.cmd_grade)
 
     sp_run = sub.add_parser("run", help="run an LLM agent through one or many challenges")
@@ -68,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_run.add_argument("--report-only", action="store_true",
                         help="skip running; just re-aggregate the leaderboard from <output>/")
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
-                        help="save every graded blob into <out>/pocs/{solved,failed}/ "
+                        help="save every graded blob into <out>/pocs/{crashed,clean}/ "
                              "(default on; --no-preserve-pocs to disable)")
     sp_run.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
                         help="end at the first target solve (default OFF, so the agent "
@@ -82,12 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="disable the live dashboard; line-by-line logs instead")
     sp_run.add_argument("--api-key", default=None,
                         help="provider API key; default reads ./.env")
-    sp_run.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-",
+    sp_run.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX,
                         help="registry prefix for the canonical challenge images")
-    sp_run.add_argument("--image-tag", default="latest",
-                        help="tag on the challenge image: 'latest' grades against the "
-                             "remote oracle, 'local-v1' grades inside the image with "
-                             "no network")
     sp_run.set_defaults(fn=commands.cmd_run)
 
     sp_traj = sub.add_parser("traj",

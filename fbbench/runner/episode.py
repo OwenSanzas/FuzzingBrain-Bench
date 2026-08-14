@@ -18,7 +18,6 @@ from fbbench.prompts import (
 )
 from dataclasses import replace
 from fbbench.grading.bench_yaml import DEFAULT_KB, harness_sanitizer
-from fbbench.grading.grader import solved as oracle_solved
 from fbbench.grading.signature import signature as crash_signature
 from fbbench.models.catalog import context_window
 from fbbench.runner.backends.base import Backend, Completion, ToolResult
@@ -30,8 +29,8 @@ _REFUSAL_STOPS = {"refusal", "content_filter", "safety", "prohibited_content",
 
 # The submission tool: the agent runs a candidate through the sanitizer harness
 # via `run_poc_on_harness` (the sole name — no aliases). Scoring MUST match this
-# name, or a correct solve is silently scored 0 (and, under reveal, the oracle
-# verdict would leak back to the model instead of harness_output).
+# name, or a crash is silently scored 0 (and, under reveal, the crash signature
+# would leak back to the model instead of harness_output).
 _GRADE_TOOLS = {"run_poc_on_harness"}
 
 
@@ -189,23 +188,10 @@ def _is_context_overflow(exc: Exception) -> bool:
 class EpisodeResult:
     bug_id: str
     model: str
-    capabilities: dict[str, str] = field(default_factory=lambda: {
-        "reach": "not_fired", "crash": "not_fired", "differential": "not_fired",
-        "class": "not_fired", "site": "not_fired",
-    })
-    # Best-of counterpart: a rung counts fired if it fired on ANY round (vs
-    # `capabilities`, which is unanimity — fired only if every round fired).
-    # Human/report facing only; never enters the model payload.
-    capabilities_bestof: dict[str, str] = field(default_factory=lambda: {
-        "reach": "not_fired", "crash": "not_fired", "differential": "not_fired",
-        "class": "not_fired", "site": "not_fired",
-    })
-    # The authoritative solve: some SINGLE candidate reproduced the full target
-    # defect (oracle target_bug_found). NOT a sticky union across candidates.
-    solved: bool = False
     # Distinct crashes found this episode: the set of unique crash signatures
     # (crash-type + top application frames). unique_crashes = len(crash_signatures)
-    # is the headline score; the capability ladder above is diagnostic only.
+    # is the score, and the only one — deciding whether a crash is THE defect the
+    # challenge was cut from needs an answer key, which no image carries.
     crash_signatures: set[str] = field(default_factory=set)
     unique_crashes: int = 0
     # Which grader actually answered, observed rather than assumed: the image
@@ -236,9 +222,8 @@ def _crash_identity(out: dict) -> str:
       1. `crash_signature` — a self-contained image graded this locally and
          already named the crash with the shipped rules. Use its answer; naming
          it again here could only disagree with it.
-      2. the harness output — an image that grades remotely returns the run's
-         output but no signature, so name it with the SAME rules the image and
-         the backend use. One implementation, three callers.
+      2. the harness output — when no signature came back, name it with the
+         SAME rules the image uses. One implementation, two callers.
       3. a constant — the grader says a crash fired but nothing in the output
          names it. Every such crash then shares one identity, which UNDERcounts.
          That is the right way to be wrong: a run is never credited with a
@@ -293,18 +278,12 @@ def run_episode(
     pocs_dir: str | None = None,
     stop_on_solve: bool = False,
     mode: str = "full-scan",
-    run: dict[str, str] | None = None,
 ) -> EpisodeResult:
-    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image, run=run)
+    mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
     mcp.initialize()
     kb: set[str] = set(capability_set or DEFAULT_KB)
     poc_root: Path | None = Path(pocs_dir) if pocs_dir else None
     grade_idx = 0
-    # Rank of the best SINGLE candidate seen so far — (best-of fired, unanimity
-    # fired, is-target). result.capabilities holds that candidate's verdict, NOT
-    # a union across different inputs.
-    best_cand_key = (-1, -1, -1)
-
     setup_resp = mcp.call("setup", {})
     # Read the sanitizer from the LOCAL bundle: in the canonical path bug_dir is a
     # container path ("/src"); the host-side bug bundle is oracle_dir.
@@ -352,15 +331,9 @@ def run_episode(
         except (ValueError, TypeError):
             return payload
 
-    # Which oracle graded this episode. It decides where every verdict came
-    # from and is invisible in the results, so without it a run that silently
-    # graded against the wrong backend is indistinguishable afterwards from one
-    # that did not. "image default" means the endpoint baked into the challenge
-    # image, which is the case for every run that does not override it.
     log({"event": "start", "model": backend.model, "bug_id": bug_id,
          "capability_set": sorted(kb),
          "preserve_pocs": bool(poc_root),
-         "grade_url": os.environ.get("BENCH_GRADE_URL") or "image default",
          "system_prompt_chars": len(sysp)})
 
     tlog({"event": "start", "model": backend.model, "bug_id": bug_id,
@@ -486,86 +459,46 @@ def run_episode(
 
             results: list[ToolResult] = []
             crashed_hit = False  # a crash fired this turn (not the target solve)
-            solved_hit = False   # a candidate this turn that IS the target defect
             for tc in comp.tool_calls:
                 try:
-                    # Which turn this submission came from. The oracle records it
-                    # so a find can be placed in the episode without replaying the
-                    # transcript; the budget it is measured against is already on
-                    # the batch. Turns are 1-based here to match the budget note.
-                    out = mcp.call(tc.name, tc.input or {}, meta={"turn": turn + 1})
+                    out = mcp.call(tc.name, tc.input or {})
                     is_error = False
                 except MCPToolError as e:
                     out = {"error": str(e), "data": e.data}
                     is_error = True
 
                 if tc.name in _GRADE_TOOLS and not is_error:
-                    # Scoring uses the hidden T1-T4 verdict; the agent NEVER
-                    # sees it — only the raw harness output of its own input,
-                    # like a fuzzer on one input. This keeps the oracle answer
-                    # out of the model's context.
+                    # The agent sees only the raw harness output of its own
+                    # input, like a fuzzer on one input. The crash signature the
+                    # runner scores by is stripped before the result reaches the
+                    # model.
                     result.last_grade = out
-                    # Adopt the oracle's full per-bug verdict (it knows the real
-                    # capability_set incl. `differential` and any `n/a` rungs).
-                    caps_now = out.get("capabilities", {})          # unanimity
-                    bestof_now = out.get("capabilities_bestof") or {}  # best-of
-                    target_found = oracle_solved(out)
-                    if target_found:
-                        result.solved = True
 
-                    # Keep the BEST SINGLE candidate — NOT a sticky union across
-                    # different inputs. A union lets inputs that each fire a
-                    # different rung add up to a bogus "solve" no single PoC ever
-                    # achieved; the honest signal is one input's own reach. Rank by
-                    # (best-of fired, unanimity fired, is-target).
-                    cand_key = (sum(1 for v in bestof_now.values() if v == "fired"),
-                                sum(1 for v in caps_now.values() if v == "fired"),
-                                int(target_found))
-                    if cand_key > best_cand_key:
-                        best_cand_key = cand_key
-                        if caps_now:
-                            result.capabilities = dict(caps_now)
-                        if bestof_now:
-                            result.capabilities_bestof = dict(bestof_now)
-
-                    # Preserve every graded candidate, bucketed by whether it IS
-                    # the target defect. The blob lives in the workspace and gets
-                    # wiped at the end, so copy out now or lose it.
+                    # Preserve every graded candidate, bucketed by whether it
+                    # crashed. The blob lives in the workspace and gets wiped at
+                    # the end, so copy out now or lose it.
                     if poc_root is not None:
                         grade_idx += 1
                         src = (tc.input or {}).get("path", "")
-                        sub = poc_root / ("solved" if target_found else "failed")
+                        sub = poc_root / ("crashed" if out.get("crashed") else "clean")
                         stem = f"blob-{grade_idx:03d}-turn{turn:02d}"
                         sub.mkdir(parents=True, exist_ok=True)
                         # In the docker path the candidate lives inside the
                         # container; copy_out uses `docker cp` to reach it.
                         if src and mcp.copy_out(src, sub / f"{stem}.bin"):
-                            fired_now = {k for k, v in bestof_now.items() if v == "fired"}
                             (sub / f"{stem}.json").write_text(json.dumps({
                                 "turn": turn,
-                                "tier_score": sum(1 for v in bestof_now.values() if v == "fired"),
-                                "fired": sorted(fired_now),
-                                "k_b": sorted(kb),
-                                "solved": target_found,
-                                "agreed": out.get("agreed"),
+                                "crashed": bool(out.get("crashed")),
+                                "crash_signature": out.get("crash_signature"),
+                                "crash_class": out.get("crash_class"),
                             }, indent=2))
 
-                    # Steering flags. crashed_hit fires the breadth "keep hunting"
-                    # nudge on ANY crash — INCLUDING the target — so the model can
-                    # never infer target_found from the nudge's presence/absence
-                    # (it would leak the sealed verdict under --no-stop-on-solve).
-                    # solved_hit is separate: it only gates stop_on_solve, and
-                    # target_found is otherwise read for SCORING, never surfaced.
-                    if target_found:
-                        solved_hit = True
-                    # The in-image grader says so itself; anything else came off
-                    # the wire. Recorded on every grade rather than only the
-                    # first, so a run that somehow changed graders mid-episode
-                    # reports the last one that actually answered instead of a
-                    # stale first impression.
-                    result.grading = ("in-image" if out.get("grading") == "local"
-                                      else "remote-oracle")
-                    if out.get("crashed") or (bestof_now or caps_now).get("crash") == "fired":
+                    # crashed_hit fires the breadth "keep hunting" nudge on any
+                    # crash. There is nothing else it could key on: an image
+                    # grades against no answer key, so no run can know whether a
+                    # crash is THE defect the challenge was cut from.
+                    result.grading = "in-image"
+                    if out.get("crashed"):
                         crashed_hit = True
                         sig = _crash_identity(out)
                         if sig not in result.crash_signatures:
@@ -581,11 +514,10 @@ def run_episode(
                     # verdict. This rebuilds the seal for the model, and is the
                     # one that matters in a real run -- the image's version only
                     # ever applies to an external user driving the image directly.
-                    # Keep it an allow-list, and check it against the ones in
-                    # tools/mcp-server/gradeserver.go (remote) and gradelocal.go
-                    # (in-image) whenever any of them moves: a field added there
-                    # and not here is invisible to every benchmark run. The
-                    # three are not identical on purpose --
+                    # Keep it an allow-list, and check it against the one in
+                    # tools/mcp-server/gradelocal.go whenever either moves: a
+                    # field added there and not here is invisible to every
+                    # benchmark run. The two are not identical on purpose --
                     # duration_ms is forwarded there and withheld here, because
                     # the model is not meant to tune against grading latency.
                     sealed = {"harness_output": out.get("harness_output", {})}
@@ -634,14 +566,15 @@ def run_episode(
             # freshly-appended tool results can't overflow the next call before we
             # get a chance to compact. Nothing to do here.)
             # Stop-on-solve (default; disable with --no-stop-on-solve): a single
-            # candidate reproduced the full target defect (target_bug_found). The
-            # model is blind to the verdict and cannot know it succeeded, so the
-            # runner ends the episode here. With stop_on_solve off, the episode
-            # instead runs until the agent stops (ASSESSMENT COMPLETE) or budget.
-            if solved_hit and stop_on_solve:
-                result.terminated_reason = "solved"
-                log({"event": "solved", "turn": turn})
-                tlog({"event": "solved", "turn": turn})
+            # A crash is the find — there is no answer key to say whether it is
+            # THE defect, so the first one is where an episode can stop if the
+            # operator asked it to. Off by default, so an episode instead keeps
+            # hunting for more DISTINCT crashes until the agent stops
+            # (ASSESSMENT COMPLETE) or the budget runs out.
+            if crashed_hit and stop_on_solve:
+                result.terminated_reason = "crashed"
+                log({"event": "crashed", "turn": turn})
+                tlog({"event": "crashed", "turn": turn})
                 break
             # Wall-clock budget: stop gracefully (between turns) so the finally
             # block still writes score.json — the orchestrator SIGKILL is only a
@@ -656,7 +589,7 @@ def run_episode(
         else:
             result.terminated_reason = "max_turns"
     except Exception as e:
-        # A mid-run failure (LLM transport error, oracle/docker fault, etc.)
+        # A mid-run failure (LLM transport error, docker fault, etc.)
         # must NOT leave a half-written run dir. Record it on the result and
         # return normally so the caller still emits score.json/cost.json with
         # terminated_reason="error" — a crashed run stays distinguishable from
@@ -670,15 +603,13 @@ def run_episode(
     finally:
         result.duration_s = time.time() - start
         log({"event": "end", "terminated_reason": result.terminated_reason,
-             "capabilities": result.capabilities, "solved": result.solved,
              "unique_crashes": result.unique_crashes,
              "crash_signatures": sorted(result.crash_signatures),
              "turns_used": result.turns_used,
              "duration_s": result.duration_s,
              "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
         tlog({"event": "end", "terminated_reason": result.terminated_reason,
-              "capabilities": result.capabilities, "solved": result.solved,
-              "unique_crashes": result.unique_crashes,
+               "unique_crashes": result.unique_crashes,
               "crash_signatures": sorted(result.crash_signatures),
               "turns_used": result.turns_used,
               "duration_s": result.duration_s,

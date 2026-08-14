@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""Final verification of the sealed-challenge pipeline.
+"""Final verification of the sealed-challenge pipeline. Runs offline.
 
-Three independent checks per bug (sampled or all):
-  1. WIRE: POST the bug's REAL poc to the remote grade server; assert its full
-     capability set (bench.yaml K_b) fires -> the oracle bundle + remote wire work.
-  2. IMAGE LEAK AUDIT: `docker run` the challenge image and assert no answer file
-     (poc/expected.yaml/binaries/grader, excluding upstream src/) is present.
-  3. IMAGE ENDPOINT: assert the image's baked-in BENCH_GRADE_URL is not an
-     address that only resolves on the machine that built it. An image pointing
-     at a docker bridge or at localhost passes every other check here -- it
-     contains no answers, it runs, the agent can explore it -- and then refuses
-     every grade for everyone who pulls it.
+Three independent checks per challenge (sampled or all):
+  1. LEAK AUDIT: `docker run` the image and assert no answer file
+     (poc/expected.yaml/binaries/grader, excluding upstream src/) is reachable.
+  2. SELF-CONTAINED: assert the image carries the sanitizer harness it grades
+     with, and carries no grading URL. An image that grades by reaching out
+     passes every other check here -- it contains no answers, it runs, the agent
+     can explore it -- and then stops working the day that host goes away.
+  3. GRADING RUNS: drive the image's own mcp-server, submit a throwaway input,
+     and assert a verdict comes back. Checks 1 and 2 both pass on an image whose
+     harness cannot start; only running one catches that, and a harness that
+     dies at startup reads as "this input did not crash" -- the most expensive
+     way for this to be wrong.
+
+Nothing here needs an answer key, so anyone who can pull an image can run it.
 
 Usage:
-  verify_sealed.py --grade-url http://localhost:8077 [--only a,b] [--sample N]
+  verify_sealed.py [--only a,b] [--sample N] [--image-prefix P]
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys, urllib.request
+import argparse, json, subprocess, sys
 from pathlib import Path
 import yaml
 
@@ -25,37 +29,36 @@ sys.path.insert(0, str(ROOT))
 from fbbench.grading.bench_yaml import find_bug, capability_set  # noqa: E402
 from fbbench.runner.mcp_client import _full_scan_alias  # noqa: E402
 
-def remote_grade(url, bug, poc_bytes):
-    req = urllib.request.Request(f"{url}/v1/challenges/{bug}/grade", data=poc_bytes,
-                                 headers={"Content-Type": "application/octet-stream"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        return json.load(r)
+def self_contained(tag):
+    """(ok, why) for "this image grades itself".
 
-# Addresses that resolve only on the build host. An image carrying one of these
-# is unusable by anyone else, and nothing about its CONTENTS says so.
-_PRIVATE_HOSTS = ("localhost", "127.0.0.1", "172.17.", "host.docker.internal", "0.0.0.0")
-
-
-def image_endpoint(bug, prefix="fbbench-challenge"):
-    """The image's baked-in grade endpoint, or None if there is no such image.
-
-    Returns ("", ...) when the variable is unset, which is just as broken as a
-    private address: grade() has nowhere to go.
+    Two things have to hold. The harness it grades with must be inside it, and
+    it must carry no grading URL -- an image that has one can still reach out
+    when something local goes wrong, and the answers would arrive with nobody
+    noticing the dependency came back.
     """
-    tag = f"{prefix}/{bug}:latest"
-    if subprocess.run(["docker", "image", "inspect", tag], capture_output=True).returncode != 0:
+    if subprocess.run(["docker", "image", "inspect", tag],
+                      capture_output=True).returncode != 0:
         return None
     r = subprocess.run(["docker", "inspect", "--format",
                         "{{range .Config.Env}}{{println .}}{{end}}", tag],
                        capture_output=True, text=True)
-    url = next((l.split("=", 1)[1].strip() for l in r.stdout.splitlines()
-                if l.startswith("BENCH_GRADE_URL=")), "")
-    private = (not url) or any(h in url for h in _PRIVATE_HOSTS)
-    return url, private
+    env = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+    url = (env.get("BENCH_GRADE_URL") or "").strip()
+    if url:
+        return False, f"carries a grading URL: {url}"
+    oracle = (env.get("BENCH_ORACLE_DIR") or "").strip()
+    if not oracle:
+        return False, "no BENCH_ORACLE_DIR: nothing says where the harness is"
+    probe = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "test", tag,
+         "-x", f"{oracle}/binaries/vuln/asan/harness"], capture_output=True)
+    if probe.returncode != 0:
+        return False, f"no executable harness at {oracle}/binaries/vuln/asan/harness"
+    return True, ""
 
 
-def image_leak(bug, prefix="fbbench-challenge"):
-    tag = f"{prefix}/{bug}:latest"
+def image_leak(tag):
     if subprocess.run(["docker", "image", "inspect", tag], capture_output=True).returncode != 0:
         return None  # no image
     cmd = ('find /challenge \\( -path "*poc*" -name "*.bin" -o -name expected.yaml '
@@ -63,11 +66,48 @@ def image_leak(bug, prefix="fbbench-challenge"):
     r = subprocess.run(["docker", "run", "--rm", tag, "sh", "-c", cmd], capture_output=True, text=True)
     return [l for l in r.stdout.splitlines() if l.strip()]
 
+def grading_runs(tag):
+    """(ok, why): submit a throwaway input over the image's own MCP server."""
+    blob = "AAAAAAAA"                      # 6 bytes of 'A' once base64-decoded
+    reqs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "exec", "arguments": {
+                "cmd": f"printf %s '{blob}' | base64 -d > /workspace/probe.bin"}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "run_poc_on_harness", "arguments": {"path": "/workspace/probe.bin"}}},
+    ]
+    stdin = "".join(json.dumps(r) + "\n" for r in reqs)
+    # seccomp=unconfined: the server needs an unprivileged user+net namespace for
+    # exec() isolation, and the default profile blocks unshare(CLONE_NEWUSER).
+    r = subprocess.run(["docker", "run", "--rm", "-i",
+                        "--security-opt", "seccomp=unconfined", tag, "mcp-server"],
+                       input=stdin, capture_output=True, text=True, timeout=900)
+    for line in r.stdout.splitlines():
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        if m.get("id") != 3:
+            continue
+        if "error" in m:
+            return False, json.dumps(m["error"])[:120]
+        sc = (m.get("result") or {}).get("structuredContent") or {}
+        if "harness_output" not in sc:
+            return False, "grade returned no harness_output"
+        return True, ""
+    return False, (r.stderr or "no response from run_poc_on_harness")[-120:]
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--grade-url", default="http://localhost:8077")
     ap.add_argument("--only", default=None)
     ap.add_argument("--sample", type=int, default=0, help="verify first N bugs only")
+    ap.add_argument("--image-prefix", default="docker.io/osanzas/fbbench-challenge-")
+    ap.add_argument("--no-pull", action="store_true",
+                    help="audit only what is already cached locally")
+    ap.add_argument("--prune", action="store_true",
+                    help="delete each image after auditing it (the corpus is ~35 GB)")
     a = ap.parse_args()
 
     bugs = a.only.split(",") if a.only else sorted(
@@ -75,58 +115,54 @@ def main():
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines())
     if a.sample:
         bugs = bugs[:a.sample]
-    rep = {"wire_ok": [], "wire_fail": [], "leak": [], "no_image": [], "no_poc": [],
-           "private_endpoint": []}
+    rep = {"ok": [], "leak": [], "no_image": [], "not_self_contained": [],
+           "grade_fail": []}
     for bug in bugs:
         bd = find_bug(bug, ROOT)
-        kb = set(capability_set(bd)) if bd else set()
-        # The public handle (image tag + oracle key) is the neutral alias.
+        # The public handle (image tag) is the neutral alias.
         alias = _full_scan_alias(str(bd)) if bd else bug
-        # wire — pick the ACTUAL crashing PoC, not a generator/helper. Prefer
-        # poc.bin, then any *.bin, never *.py/*.md/*.sh/*.txt.
-        pocs = []
-        if bd:
-            pd = bd / "poc"
-            cand = [p for p in sorted(pd.glob("*")) if p.is_file()
-                    and p.suffix not in (".py", ".md", ".sh", ".txt", ".yaml")]
-            exact = [p for p in cand if p.name == "poc.bin"]
-            bins = [p for p in cand if p.suffix == ".bin"]
-            pocs = exact or bins or cand
-        if not pocs:
-            rep["no_poc"].append(bug)
-        else:
-            try:
-                caps = remote_grade(a.grade_url, alias, pocs[0].read_bytes()).get("capabilities", {})
-                fired = {k for k, v in caps.items() if v == "fired"}
-                if kb.issubset(fired):
-                    rep["wire_ok"].append(bug)
-                else:
-                    rep["wire_fail"].append((bug, sorted(kb - fired)))
-            except Exception as e:
-                rep["wire_fail"].append((bug, str(e)[:80]))
-        # image leak
-        leak = image_leak(alias)
+        tag = f"{a.image_prefix}{alias}:latest"
+        # Pull, or an unpulled challenge reports "no image" and reads as a gap in
+        # the corpus rather than a gap in this machine's docker cache.
+        cached = subprocess.run(["docker", "image", "inspect", tag],
+                                capture_output=True).returncode == 0
+        if not cached and not a.no_pull:
+            subprocess.run(["docker", "pull", "-q", tag], capture_output=True,
+                           timeout=3600)
+
+        leak = image_leak(tag)
         if leak is None:
             rep["no_image"].append(bug)
-        elif leak:
+            print(f"  {bug:42s} no image ({tag})", flush=True)
+            continue
+        if leak:
             rep["leak"].append((bug, leak))
-        # image endpoint — where the image can REACH, as opposed to what it holds
-        endpoint = image_endpoint(alias)
-        if endpoint is not None and endpoint[1]:
-            rep["private_endpoint"].append((bug, endpoint[0]))
-        print(f"  {bug:42s} wire={'ok' if bug in rep['wire_ok'] else 'FAIL/na'} "
-              f"leak={'CLEAN' if (leak is not None and not leak) else ('!!!' if leak else 'no-img')} "
-              f"endpoint={'!!!' if (endpoint and endpoint[1]) else ('ok' if endpoint else 'no-img')}",
-              flush=True)
-    json.dump(rep, open(ROOT / "tools" / "sealed" / "verify_report.json", "w"), indent=2, default=str)
-    print(f"\n=== verify: wire_ok={len(rep['wire_ok'])} wire_fail={len(rep['wire_fail'])} "
-          f"image_leak={len(rep['leak'])} private_endpoint={len(rep['private_endpoint'])} "
-          f"no_image={len(rep['no_image'])} no_poc={len(rep['no_poc'])} / {len(bugs)} ===")
-    if rep["wire_fail"]: print("WIRE FAILURES:", rep["wire_fail"][:5])
-    if rep["leak"]: print("*** IMAGE LEAKS:", rep["leak"][:5])
-    if rep["private_endpoint"]:
-        print("*** PRIVATE ENDPOINTS (these images grade for nobody but their builder):",
-              rep["private_endpoint"][:5])
+
+        sc = self_contained(tag)
+        if sc and not sc[0]:
+            rep["not_self_contained"].append((bug, sc[1]))
+
+        graded, why = grading_runs(tag)
+        if not graded:
+            rep["grade_fail"].append((bug, why))
+
+        clean = not leak and (sc and sc[0]) and graded
+        if clean:
+            rep["ok"].append(bug)
+        print(f"  {bug:42s} leak={'CLEAN' if not leak else '!!!'} "
+              f"self-contained={'ok' if (sc and sc[0]) else '!!!'} "
+              f"grades={'ok' if graded else '!!!'}", flush=True)
+        # Only ever an image this run pulled: deleting one the operator already
+        # had would cost them the download, not just the disk.
+        if a.prune and not cached:
+            subprocess.run(["docker", "rmi", tag], capture_output=True)
+
+    print("\n" + json.dumps({k: v for k, v in rep.items() if v}, indent=2))
+    (Path(__file__).with_name("verify_report.json")).write_text(json.dumps(rep, indent=2))
+    bad = rep["leak"] or rep["not_self_contained"] or rep["grade_fail"]
+    print(f"\n{len(rep['ok'])}/{len(bugs)} fully clean")
+    return 1 if bad else 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

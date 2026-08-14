@@ -15,24 +15,18 @@ type gradeParams struct {
 
 // toolGrade is the agent-facing run_poc_on_harness tool.
 //
-// Two ways to answer it, in preference order:
+// One way to answer it: the image bakes the sanitizer harness, so the candidate
+// is run right here and scored on distinct crashes. Nothing leaves the machine
+// and no service has to be up. Still answer-free — the image carries no
+// expected.yaml, no fixed build, nothing naming the defect.
 //
-//   - LOCAL (self-contained image). The image bakes the sanitizer harness, so
-//     the candidate is run right here and scored on distinct crashes. Nothing
-//     leaves the machine and no service has to be up. Still answer-free: the
-//     image carries no expected.yaml, no fixed build, nothing naming the defect.
-//   - REMOTE (legacy image). No baked harness, so the candidate goes to the
-//     grading oracle at BENCH_GRADE_URL, which owns the answer key and judges
-//     the five-rung capability ladder.
+// There is no second way. Grading used to be able to fall back to a grading
+// service over the network, which is why an image that could not find its own
+// harness still appeared to work: it quietly reached out instead, and the run
+// depended on a host being up that nothing in the run mentioned. An image
+// without a baked harness is now an error, said once and loudly.
 //
-// The order matters for the images already published: they have no harness
-// baked in, so they keep taking the remote path unchanged.
-//
-// `turn` is which turn of the episode this submission came from. It reaches the
-// remote oracle as a header and is meaningless locally (one container is one
-// episode, so the pool is already this run's), but it stays in the signature so
-// both paths are called the same way.
-func (s *server) toolGrade(args []byte, turn int) (any, error) {
+func (s *server) toolGrade(args []byte) (any, error) {
 	var p gradeParams
 	if err := json.Unmarshal(args, &p); err != nil {
 		return nil, err
@@ -47,12 +41,9 @@ func (s *server) toolGrade(args []byte, turn int) (any, error) {
 	if st, err := os.Stat(abs); err != nil || st.IsDir() {
 		return nil, fmt.Errorf("grade target not found or is a directory: %s", p.Path)
 	}
-	if s.localHarness() != "" {
-		return s.gradeLocal(abs)
+	if s.localHarness() == "" {
+		return nil, fmt.Errorf("run_poc_on_harness needs the sanitizer harness baked "+
+			"into the image, and none is present under %s", s.oracleDir)
 	}
-	if s.gradeURL == "" {
-		return nil, fmt.Errorf("run_poc_on_harness needs either a harness baked into the image " +
-			"(BENCH_ORACLE_DIR) or a remote grader (BENCH_GRADE_URL); neither is present")
-	}
-	return s.gradeRemote(abs, turn)
+	return s.gradeLocal(abs)
 }

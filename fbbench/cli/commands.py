@@ -6,13 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fbbench.cli.console import (
-    TIERS, bold, cyan, dim, fmt_status, green, red, yellow,
-)
+from fbbench.cli.console import bold, cyan, dim, green, red, yellow
 from fbbench.env import detect_provider, read_dotenv
 from fbbench.grading import (
     capability_set, find_bug, grade_blob, list_bugs, read_bench,
-    solved as oracle_solved,
 )
 from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
@@ -67,7 +64,17 @@ def cmd_show(args) -> int:
 
 
 def cmd_grade(args) -> int:
-    # No LLM, no Docker: POST the blob to the remote oracle and print the verdict.
+    """Run one blob through a challenge's harness, in that challenge's image.
+
+    No LLM and no network: the sanitizer harness travels in the image, so this
+    is the same code path an episode's run_poc_on_harness takes. What it can
+    report is what the harness did — whether the input faulted, and how that
+    crash signs. There is no PASS/FAIL against a target defect, because no image
+    carries the answer key that question needs.
+
+    Exit 0 when the input crashed the harness, 1 when it did not, so the command
+    composes in a shell loop over a fuzzer's findings.
+    """
     bd = _require_bug(args.bug_id)
     if not args.blob:
         sys.exit(red("  grade needs a blob: ./fb-bench grade <bug> <input-file>"))
@@ -75,82 +82,53 @@ def cmd_grade(args) -> int:
     if not blob.is_file():
         sys.exit(red(f"error: blob not found: {blob}"))
 
-    K_b = capability_set(bd)
     print()
     print(bold("  fb-bench grade  ") + cyan(args.bug_id))
     print(f"  {'blob:':<10s} {cyan(str(blob))}  {dim(f'({blob.stat().st_size} bytes)')}")
-    print(f"  {'K_b:':<10s} {','.join(K_b)}")
-    print(dim("  POSTing to the remote oracle…"))
+    print(dim("  running it through the harness in the challenge image…"))
 
     try:
         r, elapsed = grade_blob(bd, blob)
     except Exception as e:
         sys.exit(red(f"  grade failed: {e}"))
 
-    caps = r["capabilities"]
-    caps_bestof = r.get("capabilities_bestof") or {}
+    crashed = bool(r.get("crashed"))
     print()
-    print(bold("  results:") + dim("  (unanimity — fired on every round)"))
-    for flag, tier in TIERS:
-        status = caps.get(flag, "n/a")
-        glyph, word = fmt_status(status, flag in K_b)
-        print(f"    {glyph}  {tier}  {flag:<6s}  {word}")
+    if crashed:
+        print(bold("  crash:"))
+        print(f"    {'class:':<12s} {cyan(r.get('klass') or '—')}")
+        if r.get("signature_text"):
+            print(f"    {'signature:':<12s} {r['signature_text']}")
+        elif r.get("signature"):
+            print(f"    {'signature:':<12s} {r['signature']}")
 
-    # Best-of view alongside unanimity (a rung fired on ANY round). Human-facing
-    # only; the model never receives either verdict.
-    if caps_bestof:
-        print()
-        print(bold("  results:") + dim("  (best-of — fired on any round)"))
-        for flag, tier in TIERS:
-            status = caps_bestof.get(flag, "n/a")
-            glyph, word = fmt_status(status, flag in K_b)
-            print(f"    {glyph}  {tier}  {flag:<6s}  {word}")
+    # The operator must see at least what the model would have seen — the raw
+    # harness output of this input. (Server-truncated already: stdout tail 2000,
+    # stderr tail 8000.) -v prints both streams whole; without it, stderr alone,
+    # which is where every sanitizer report goes.
+    print(bold("  harness output:")
+          + dim(f"   exit_code={r.get('exit_code')}  signal={r.get('signal') or '—'}"
+                f"  {r.get('duration_ms')}ms"))
+    printed = False
+    for stream in ("stdout", "stderr") if args.verbose else ("stderr",):
+        text = (r.get(stream) or "").rstrip("\n")
+        if text:
+            printed = True
+            print(f"    {dim(stream + ':')}")
+            for line in text.splitlines():
+                print(f"      {line}")
+    # A signal death with no captured output means the harness crashed before
+    # flushing anything (e.g. a spurious startup segfault) — say so, so a blank
+    # block doesn't read as lost/hidden output.
+    if not printed and r.get("signal"):
+        print(dim("    (no output — harness died on the signal before emitting any)"))
 
-    # The human grader must see at least what the model saw — the raw harness
-    # output of its own input — plus the verdict on top. (Server-truncated
-    # already: stdout tail 2000, stderr tail 8000.)
-    ho = r.get("harness_output") or {}
-    if ho:
-        print()
-        print(bold("  harness output:")
-              + dim(f"   exit_code={ho.get('exit_code')}  signal={ho.get('signal') or '—'}"))
-        printed = False
-        for stream in ("stdout", "stderr"):
-            text = (ho.get(stream) or "").rstrip("\n")
-            if text:
-                printed = True
-                print(f"    {dim(stream + ':')}")
-                for line in text.splitlines():
-                    print(f"      {line}")
-        # A signal death with no captured output means the harness crashed before
-        # flushing anything (e.g. a spurious startup segfault) — say so, so a blank
-        # block doesn't read as lost/hidden output.
-        if not printed and ho.get("signal"):
-            print(dim("    (no output — harness died on the signal before emitting any)"))
-
-    if args.verbose:
-        ev = r.get("evidence") or {}
-        print()
-        print(bold("  evidence:"))
-        for flag in (f for f, _ in TIERS):
-            if ev.get(flag):
-                print(f"    {dim(flag + ':'):<10s} {ev[flag]}")
-
-    agreed = r.get("agreed", False)
-    # Authoritative: the oracle's own solve flag (a single input reproduced the
-    # full defect). Fall back to caps-all-fired only if neither name is present.
-    if "solved" in r or "target_bug_found" in r:
-        kb_ok = oracle_solved(r)
-    else:
-        kb_ok = all(caps.get(c) == "fired" for c in K_b) and agreed
-    summary_color = green if kb_ok else red
-    badge = "PASS" if kb_ok else "FAIL"
-
+    summary_color = green if crashed else red
+    badge = "CRASHED" if crashed else "no crash"
     print()
-    print(f"  {bold('verdict:')}   {summary_color(badge)}   "
-          f"{dim(f'agreed={agreed}, {elapsed:.1f}s')}")
+    print(f"  {bold('verdict:')}   {summary_color(badge)}   {dim(f'{elapsed:.1f}s')}")
     print()
-    return 0 if kb_ok else 1
+    return 0 if crashed else 1
 
 
 def cmd_models(_args) -> int:
@@ -187,7 +165,7 @@ def cmd_run(args) -> int:
 
     A single run is just a 1-cell matrix; N bugs/models/samples is a sweep. Both
     go through the SAME engine (orchestrator.run_matrix). Always pulls the public
-    challenge image and grades via the remote oracle (no local mode).
+    challenge image, which grades inside itself with no network at all.
     """
     from fbbench.sweep.orchestrator import run_matrix, resolve_models, resolve_bugs
 
@@ -277,7 +255,6 @@ def cmd_run(args) -> int:
         stop_on_solve=getattr(args, "stop_on_solve", True),
         api_key=api_key,
         image_prefix=getattr(args, "image_prefix", None),
-        image_tag=getattr(args, "image_tag", None),
         report_only=getattr(args, "report_only", False),
         runner=[runner_py, "-m", "fbbench.runner"],
         arm=arm, auth=auth, model_map=model_map,
