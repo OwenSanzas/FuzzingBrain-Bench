@@ -4,14 +4,11 @@ After a sweep, :func:`write_summary` injects a params+results blob into
 ``summary_template.html`` and writes ``<output>/index.html`` — a double-clickable
 matrix of every (bug x model) cell, each linking to that episode's own report.
 
-ANSWER SAFETY: the summary reads only each cell's ``score.json`` (the agent's
-achieved tier + which ladder flags fired + its own crash signatures + cost +
-terminated reason). It never opens ``expected.yaml`` / ``poc`` / a description,
-and emits no bug class or crash location. "solved" is derived purely from the
-cell's own capabilities (every applicable, non-``n/a`` flag fired) — so no
-answer key is consulted. Crash signatures are the AGENT's findings, distilled
-from harness output it had already seen; they say what it hit, never what it was
-supposed to hit.
+ANSWER SAFETY: the summary reads only each cell's ``score.json`` (its own crash
+signatures + cost + terminated reason). It never opens an answer artifact of
+any kind, and emits no bug class or crash location. Crash
+signatures are the AGENT's findings, distilled from harness output it had
+already seen; they say what it hit, never what it was supposed to hit.
 """
 from __future__ import annotations
 
@@ -20,22 +17,28 @@ from pathlib import Path
 
 _TEMPLATE = Path(__file__).with_name("summary_template.html")
 _DIFFICULTY = Path(__file__).with_name("difficulty.json")
-LADDER = ["reach", "crash", "differential", "class", "site"]
 
 
-def _load_difficulty() -> tuple[dict, int]:
-    """Per-bug difficulty D (1..5) + the max score (sum of D over all 68 bugs).
+def _load_difficulty() -> tuple[dict, int, int]:
+    """The FROZEN per-challenge difficulty table: (D by challenge, cap, corpus max).
 
-    D comes from the published N=8 pyramid (D = 5 - ceil(S/2), S = # of the 8
-    frontier runs that solved the bug). A model's Score = sum of D over the bugs
-    it solved — solving rare hard bugs is worth more. Answer-safe: difficulty is
-    an aggregate solve-rate, not any bug's PoC/fault.
+    D (1..5) is measured from a fixed 3-model panel: how much of the panel
+    crashed the challenge at all, and how freely it gave crashes up to whoever
+    did. The table is frozen on purpose — a run must not derive the scale it is
+    then scored on, and recomputing it silently would move every historical
+    score. Answer-safe: a coefficient is an aggregate over model behaviour, not
+    any challenge's PoC or fault.
+
+    `cap` is the most crashes one challenge can earn, so a challenge that hands
+    out eight signatures for one underlying defect cannot drown out the rest.
+    The corpus max is returned for context only — a run over a SUBSET is scored
+    against its own challenges (see build_summary).
     """
     try:
         d = json.loads(_DIFFICULTY.read_text())
-        return d.get("difficulty", {}), int(d.get("max_score", 0))
+        return d.get("difficulty", {}), int(d.get("cap", 3)), int(d.get("max_score", 0))
     except Exception:
-        return {}, 0
+        return {}, 3, 0
 
 
 def _load(path: Path) -> dict:
@@ -43,17 +46,6 @@ def _load(path: Path) -> dict:
         return json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
-
-
-def _solved(sc: dict) -> bool:
-    # Authoritative: a single candidate reproduced the full target defect
-    # (score.solved). Fall back to the best-candidate caps only for older runs
-    # that predate the field. NEVER a sticky union across candidates.
-    if "solved" in sc:
-        return bool(sc["solved"])
-    caps = sc.get("capabilities", {})
-    applicable = {k: v for k, v in caps.items() if v != "n/a"}
-    return bool(applicable) and all(v == "fired" for v in applicable.values())
 
 
 def _image_pattern(image: str, alias: str) -> str:
@@ -107,7 +99,7 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
     models = models or s_models
     samples = samples if samples is not None else s_samples
 
-    difficulty, max_score = _load_difficulty()
+    difficulty, cap, corpus_max = _load_difficulty()
 
     cells = []
     cost_sum = 0.0
@@ -126,7 +118,6 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                 if not sj.is_file():
                     continue
                 sc = _load(sj)
-                caps = sc.get("capabilities", {})
                 cost = float(sc.get("total_usd") or 0.0)
                 cost_sum += cost
                 cfg = sc.get("config") or {}
@@ -148,19 +139,15 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
                 challenge_sigs.setdefault(bug, set()).update(sigs)
                 cells.append({
                     "bug": bug, "model": model, "sample": sample,
-                    "tier": int(sc.get("tier_score", 0)),
                     "crashes": int(sc.get("unique_crashes", 0)),
                     # The signatures behind that count (crash type + top frames),
                     # so the page can dedupe across seeds and show WHAT was hit
                     # rather than only how many. The agent's own findings — see
                     # the answer-safety note at the top of this module.
                     "sigs": sigs,
-                    # Whether this cell was graded against the capability ladder
-                    # at all. False for in-image grading, which has no answer key.
-                    "has_ladder": bool(caps),
-                    "d": int(difficulty.get(bug, 0)),  # published difficulty 1..5
-                    "caps": caps,
-                    "solved": _solved(sc),
+                    # Frozen difficulty coefficient for this challenge; 0 when
+                    # the challenge post-dates the table and so is unscored.
+                    "d": int(difficulty.get(bug, 0)),
                     "cost": cost,
                     "mode": cfg.get("mode") or sc.get("mode") or "blind",
                     "reason": sc.get("terminated_reason", ""),
@@ -178,7 +165,7 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "mode": _agree("mode", "blind"),
         "max_turns": _agree("max_turns", max_turns),
         "timeout_s": _agree("timeout_s"),
-        "stop_on_solve": _agree("stop_on_solve"),
+        "stop_on_crash": _agree("stop_on_crash"),
         "preserve_pocs": _agree("preserve_pocs"),
         # No default: a sweep whose cells disagree, or that recorded nothing,
         # should say so rather than inherit a claim about how it was graded.
@@ -203,17 +190,36 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "challenges_with_crashes": sum(1 for sm in challenge_sigs.values() if sm),
     }
 
+    # ---- difficulty-weighted score ------------------------------------
+    # credit = min(distinct crashes, cap) * D, summed over the challenges the
+    # model actually RAN. The denominator is run-scoped on purpose: a 7-challenge
+    # run is scored out of those 7, not out of the whole corpus, so a partial
+    # sweep still reports a real fraction. The cap lives HERE and nowhere else —
+    # coefficients come from raw counts, so capping both would apply the
+    # correction twice.
+    scores = {}
+    for model in models:
+        ran = [b for b in bugs if (b, model) in pair_sigs]
+        scored = [b for b in ran if difficulty.get(b)]
+        scores[model] = {
+            "scored": sum(min(len(pair_sigs[(b, model)]), cap) * difficulty[b]
+                          for b in scored),
+            "max": cap * sum(difficulty[b] for b in scored),
+            "challenges_run": len(ran),
+            # Ran, but no coefficient: the challenge post-dates the frozen table.
+            # Counted nowhere rather than silently scored 0, and named so a
+            # shrinking denominator cannot be mistaken for a worse model.
+            "unscored": sorted(set(ran) - set(scored)),
+        }
+    # Totals are only comparable when every model faced the same challenges.
+    comparable = len({s["challenges_run"] for s in scores.values()}) <= 1
+
     return {
         "exp": exp or exp_dir.name,
         # What this page reports: `crashes` = the distinct crash signatures the
         # agent produced, deduped over the samples and models that share a cell.
         "pairs": pairs,
         "totals": totals,
-        # Does ANY cell here carry a ladder verdict? A sweep run entirely
-        # against self-contained images does not, and the page uses this to show
-        # what was measured (distinct crashes) instead of a grid of zeroes that
-        # reads as five failed checks per cell.
-        "graded_ladder": any(c.get("has_ladder") for c in cells),
         "models": models,
         "bugs": bugs,
         "samples": samples,
@@ -221,7 +227,15 @@ def build_summary(exp_dir: str | Path, *, exp: str | None = None,
         "config": config,
         "total_cost": total_cost if total_cost is not None else cost_sum,
         "elapsed_s": elapsed_s,
-        "max_score": max_score,
+        # Per-model difficulty-weighted score, each over its own denominator.
+        "scores": scores,
+        "comparable": comparable,
+        # The frozen table this run was scored against: the coefficients for
+        # THIS run's challenges, the per-challenge cap, and the whole-corpus
+        # ceiling for context.
+        "difficulty": {b: difficulty[b] for b in bugs if difficulty.get(b)},
+        "cap": cap,
+        "corpus_max": corpus_max,
         "cells": cells,
     }
 
