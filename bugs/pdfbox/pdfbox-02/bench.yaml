@@ -8,4 +8,3 @@ harness:
   invocation:
   - '@@'
 
-capability_set: [reach, crash, differential, class, site]

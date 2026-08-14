@@ -6,4 +6,3 @@ harness:
   sanitizer: libfuzzer
   engine: libfuzzer
   invocation: ["-timeout=10", "-rss_limit_mb=2048", "@@"]
-capability_set: [crash, differential]

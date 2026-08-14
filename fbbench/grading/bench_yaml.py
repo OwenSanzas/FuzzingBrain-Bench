@@ -1,17 +1,15 @@
 """bench.yaml reading + bug discovery, with no external YAML dependency.
 
-bench.yaml top-levels we need (project, capability_set, ...) are flat
-scalars or one-line [lists], so a tiny ad-hoc reader avoids pulling PyYAML
-into the stdlib-only CLI path. This replaces the four near-identical readers
-that used to live in fb-bench, the runner, and the sweep scripts.
+bench.yaml top-levels we need (project, language, ...) are flat scalars or
+one-line [lists], so a tiny ad-hoc reader avoids pulling PyYAML into the
+stdlib-only CLI path. This replaces the four near-identical readers that used
+to live in fb-bench, the runner, and the sweep scripts.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 from fbbench.paths import REPO
-
-DEFAULT_KB = ["reach", "crash", "differential", "class", "site"]
 
 
 def harness_sanitizer(bug_dir: Path) -> str | None:
@@ -53,12 +51,6 @@ def read_bench(path: Path) -> dict:
         else:
             out[k.strip()] = v.strip("\"'")
     return out
-
-
-def capability_set(bug_dir: Path) -> list[str]:
-    """K_b (required flags) for a bug, or the full default ladder if unset."""
-    kb = read_bench(Path(bug_dir) / "bench.yaml").get("capability_set")
-    return kb if isinstance(kb, list) and kb else list(DEFAULT_KB)
 
 
 def find_bug(bug_id: str, repo: Path = REPO) -> Path | None:

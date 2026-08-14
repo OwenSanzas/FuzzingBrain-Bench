@@ -6,8 +6,8 @@ be opened straight in a browser — no server. It reads the run dir's
 GitHub-dark style of the AGF reports:
 
 * a header with the bug / model / sanitizer / language tags,
-* hero stats (tier score, turns, tool calls, cost),
-* the capability ladder (reach -> crash -> differential -> class -> site),
+* hero stats (distinct crashes, turns, tool calls, cost),
+* the distinct crash signatures the run produced,
 * cards for token / cost breakdown, per-tool call counts, and run metadata,
 * the full trajectory table (every tool call, its argument and result, with
   the run_poc_on_harness() calls and the faulting call highlighted).
@@ -20,14 +20,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fbbench.grading import graded_flags
+from fbbench.grading.bench_yaml import find_bug, harness_sanitizer, read_bench
 from fbbench.runner.traj import GRADE_TOOLS, build_traj, _grade_out
 
-LADDER = ["reach", "crash", "differential", "class", "site"]
-
 _MAX_BLOCK = 6000  # cap each rendered tool arg/output block (raw transcript has full)
-_LADDER_LABEL = {"reach": "reach", "crash": "crash", "differential": "differential",
-                 "class": "class", "site": "site"}
 
 
 def _esc(s) -> str:
@@ -53,28 +49,6 @@ def _tool_stats(nodes: list[dict]) -> list[tuple[str, int, int]]:
     return sorted(((t, c, e) for t, (c, e) in agg.items()), key=lambda r: -r[1])
 
 
-def _ladder_html(caps: dict, kb: list[str]) -> str:
-    # Applicability is the ORACLE's call: a tier it does not grade for THIS bug
-    # comes back "n/a". Render straight from caps so the ladder can never disagree
-    # with the tier count — both read the same authoritative dict. kb is NOT
-    # consulted: a local guess (DEFAULT_KB) drifted from what the run recorded
-    # and greyed tiers it had actually fired (5/5 header, differential as ·).
-    cells = []
-    for k in LADDER:
-        state = caps.get(k)
-        if state == "fired":
-            cls, glyph = "fired", "●"
-        elif state == "not_fired":
-            cls, glyph = "miss", "○"
-        else:  # "n/a" or absent → not applicable to this bug
-            cls, glyph = "na", "·"
-        cells.append(
-            f'<div class="rung {cls}"><div class="g">{glyph}</div>'
-            f'<div class="k">{_LADDER_LABEL[k]}</div></div>'
-        )
-    return '<div class="ladder">' + '<div class="arrow">→</div>'.join(cells) + "</div>"
-
-
 def _stat(n: str, label: str, cls: str = "") -> str:
     return f'<div class="stat"><div class="n {cls}">{n}</div><div class="l">{_esc(label)}</div></div>'
 
@@ -83,7 +57,7 @@ def _yn(v) -> str:
     return "yes" if v else "no"
 
 
-def _config_rows(score: dict, kb: list[str], max_turns_fallback) -> list[tuple[str, str]]:
+def _config_rows(score: dict, max_turns_fallback) -> list[tuple[str, str]]:
     """Every run knob that shaped this episode, as (label, value) pairs.
 
     Reads the `config` block written by the runner, and also falls back to the
@@ -112,10 +86,7 @@ def _config_rows(score: dict, kb: list[str], max_turns_fallback) -> list[tuple[s
     if mt is not None:
         rows.append(("turn budget", str(mt)))
 
-    if kb:
-        rows.append(("required ladder (K_b)", " → ".join(kb)))
-
-    rows.append(("stop-on-solve", _yn(cfg.get("stop_on_solve", score.get("stop_on_solve", True)))))
+    rows.append(("stop-on-crash", _yn(cfg.get("stop_on_crash", False))))
     rows.append(("preserve PoCs", _yn(cfg.get("preserve_pocs", score.get("preserve_pocs", True)))))
     # Older runs carry no `grading` key. Say so rather than letting a report
     # state something the run never recorded.
@@ -281,29 +252,15 @@ def _conversation_html(turns: list[dict], system_prompt: str, initial_user: str)
     return head + '<div class="conv">' + body + "</div>"
 
 
-def _findings_section(score: dict, caps: dict, kb: list[str], tier: int,
-                      ladder_bestof_html: str) -> tuple[str, str, str]:
+def _findings_section(score: dict) -> tuple[str, str, str]:
     """The results block, and the headline stat above it.
 
-    Two shapes, one of them historical. Grading counts DISTINCT CRASHES: an
-    image has no answer key, so it cannot judge a candidate against the recorded
-    defect. Runs archived from when something could still do that carry a
-    five-rung ladder, and they keep rendering it.
-
-    A run is treated as ladder-less when it recorded no capabilities at all —
-    derived from the data, so an old score.json still renders the way it
-    always did, and every current one shows crashes.
+    The score is DISTINCT CRASHES. An image carries no answer key, so nothing
+    can judge a candidate against the recorded defect; what a run can say is
+    which crashes it produced that no earlier submission in it had.
     """
     uniq = score.get("unique_crashes", 0)
     sigs = score.get("crash_signatures") or []
-    if caps:
-        return (
-            '<h2>Capability ladder</h2>\n'
-            '<div class="sub">unanimity &mdash; a rung counts only if it fired on '
-            'every round (drives the tier score)</div>\n'
-            + _ladder_html(caps, kb) + "\n" + ladder_bestof_html,
-            f"{tier}/{len(kb) or len(LADDER)}", "tier score")
-
     rows = "".join(
         f'<tr><td class="r">{i}</td><td><code>{_esc(s)}</code></td></tr>'
         for i, s in enumerate(sigs, 1)
@@ -313,9 +270,7 @@ def _findings_section(score: dict, caps: dict, kb: list[str], tier: int,
     html = (
         '<h2>Distinct crashes</h2>\n'
         f'<div class="sub">graded <b>{_esc(grading)}</b> &mdash; each row is one '
-        'crash this run produced that no earlier submission in it had. The '
-        'five-rung capability ladder needs an answer key and nothing computes '
-        'it, so it is omitted rather than shown as unfired.</div>\n'
+        'crash this run produced that no earlier submission in it had.</div>\n'
         '<table><thead><tr><th class="r">#</th><th>signature</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>'
     )
@@ -331,33 +286,20 @@ def build_report_html(run_dir: Path) -> str:
     bug = score.get("bug_id", run_dir.parent.parent.name if run_dir.name.startswith("seed")
                      else run_dir.name)
     model = score.get("model", "—")
-    caps = score.get("capabilities", {})
-    caps_bestof = score.get("capabilities_bestof", {})
-    tier = score.get("tier_score", 0)
     reason = score.get("terminated_reason", "—")
     turns = score.get("turns_used", 0)
     dur = score.get("duration_s", 0.0)
     usd = score.get("total_usd") or cost.get("total_usd") or 0.0
     err = score.get("error", "")
 
-    # capability_set + sanitizer / language come from the transcript start event.
-    kb: list[str] = []
+    # Header tags: the public build facts, straight from this challenge's
+    # bench.yaml. They used to be read from the transcript's start event, which
+    # never carried them — so both were always blank and the tags never rendered.
     sanitizer = language = ""
-    if tpath.is_file():
-        for line in tpath.read_text().splitlines():
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get("event") == "start":
-                kb = sorted(e.get("capability_set", []) or [])
-                break
-
-    # One rule for "which rungs does this bug have", shared with the sweep
-    # leaderboard and the live dashboard: the recorded "n/a" markers win, the
-    # declared capability_set answers when there is no verdict. Getting this wrong
-    # is how a fully-solved 2-rung challenge ends up displayed as 2/5.
-    kb = graded_flags(caps, kb or (score.get("config") or {}).get("capability_set"))
+    bd = find_bug(bug)
+    if bd is not None:
+        language = read_bench(bd / "bench.yaml").get("language", "") or ""
+        sanitizer = harness_sanitizer(bd) or ""
 
     grades = [n for n in nodes if n["tool"] in GRADE_TOOLS]
     faults = [n for n in grades if n["crash"]]
@@ -377,14 +319,9 @@ def build_report_html(run_dir: Path) -> str:
     tags.append(mode)
     tag_html = "".join(f'<span class="tag">{_esc(t)}</span>' for t in tags)
 
-    # Authoritative solve: a SINGLE candidate reproduced the full target defect
-    # (score.solved / terminated "solved"). Fall back to the best-candidate caps
-    # for older runs that predate the field. NOT a sticky union across inputs.
-    if "solved" in score:
-        solved = bool(score.get("solved"))
-    else:
-        solved = bool(caps) and all(caps.get(k) == "fired" for k in (kb or LADDER))
-    verdict_cls = "g" if solved else ("r" if reason == "error" else "a")
+    # Green when the run found something, red on error, amber otherwise.
+    verdict_cls = ("r" if reason == "error"
+                   else ("g" if score.get("unique_crashes") else "a"))
 
     # ---- trajectory rows ----
     traj_rows = []
@@ -415,28 +352,9 @@ def build_report_html(run_dir: Path) -> str:
         conv_turns, system_prompt_full, initial_user = build_conversation(tpath)
         conv_html = _conversation_html(conv_turns, system_prompt_full, initial_user)
 
-    config_html = _config_html(_config_rows(score, kb, None))
+    config_html = _config_html(_config_rows(score, None))
 
-    # Best-of ladder shown alongside the unanimity one (only if the run recorded
-    # it). Unanimity drives the tier score; best-of is the "fired on any round"
-    # view. Both are human/report facing — neither reaches the model.
-    tier_bestof = score.get("tier_score_bestof")
-    ladder_bestof_html = ""
-    if caps_bestof:
-        ladder_bestof_html = (
-            '<div class="sub" style="margin-top:14px">best-of '
-            f'&mdash; fired on any round ({tier_bestof}/{len(kb)})</div>'
-            + _ladder_html(caps_bestof, kb)
-        )
-
-    # What this run can honestly show depends on who graded it. The five-rung
-    # ladder is the ORACLE's verdict; local grading never computes it, and
-    # rendering five grey "not fired" rungs invites the reader to conclude the
-    # agent failed all of them rather than that nothing was measured. So a
-    # locally-graded run shows what it did measure — the distinct crashes — and
-    # the ladder simply is not there.
-    findings_html, headline, headline_label = _findings_section(
-        score, caps, kb, tier, ladder_bestof_html)
+    findings_html, headline, headline_label = _findings_section(score)
 
     return _TEMPLATE.format(
         bug=_esc(bug), model=_esc(model), tags=tag_html,
@@ -487,15 +405,7 @@ h2{{font-size:1.25rem;margin:48px 0 14px;padding-bottom:8px;border-bottom:1px so
 .stat .n{{font-size:2rem;font-weight:700;letter-spacing:-.02em;}}
 .stat .n.g{{color:var(--green)}}.stat .n.a{{color:var(--accent)}}.stat .n.r{{color:var(--red)}}.stat .n.p{{color:var(--purple)}}
 .stat .l{{color:var(--muted);font-size:.82rem;margin-top:2px;}}
-.ladder{{display:flex;align-items:center;gap:6px;margin:18px 0 4px;flex-wrap:wrap;}}
-.ladder .arrow{{color:var(--muted);font-size:1.1rem;}}
-.rung{{background:var(--card);border:1px solid var(--line);border-radius:12px;
 padding:14px 18px;text-align:center;min-width:108px;}}
-.rung .g{{font-size:1.5rem;line-height:1;}}
-.rung .k{{font-size:.8rem;color:var(--muted);margin-top:5px;}}
-.rung.fired{{border-color:#2386364d;background:#23863618;}}.rung.fired .g{{color:var(--green);}}
-.rung.miss .g{{color:#46506080;}}
-.rung.na{{opacity:.4;}}.rung.na .g{{color:var(--muted);}}
 .grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}}
 .card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;}}
 .card h3{{margin:0 0 10px;font-size:.95rem;}}

@@ -8,9 +8,8 @@ from pathlib import Path
 
 from fbbench.cli.console import bold, cyan, dim, green, red, yellow
 from fbbench.env import detect_provider, read_dotenv
-from fbbench.grading import (
-    capability_set, find_bug, grade_blob, list_bugs, read_bench,
-)
+from fbbench.grading import find_bug, grade_blob, list_bugs, read_bench
+from fbbench.grading.bench_yaml import harness_sanitizer
 from fbbench.models import (
     CATALOG, PRICES, PROVIDER_DEFAULT, PROVIDER_KEY_ENV, needs_key,
     route_provider,
@@ -28,17 +27,20 @@ def _require_bug(bug_id: str) -> Path:
 def cmd_list(_args) -> int:
     bugs = list_bugs()
     print(bold(f"\n  {len(bugs)} bugs available\n"))
-    print(f"  {'bug_id':<38s}  {'K_b':<28s}  project")
-    print(f"  {'-'*38}  {'-'*28}  -----")
+    # language + sanitizer: the public build facts setup() already hands the
+    # model, so listing them reveals nothing the challenge itself withholds.
+    print(f"  {'bug_id':<38s}  {'language':<10s}  {'sanitizer':<12s}  project")
+    print(f"  {'-'*38}  {'-'*10}  {'-'*12}  -----")
     for bug_id, bd in bugs:
         try:
             bench = read_bench(bd / "bench.yaml")
             project = bench.get("project", "")
-            K_b = bench.get("capability_set", [])
+            language = bench.get("language", "")
+            san = harness_sanitizer(bd) or ""
         except Exception:
-            project, K_b = "", []
-        flags = ",".join(K_b) if K_b else "?"
-        print(f"  {bug_id:<38s}  {cyan(flags):<{28 + len(cyan(flags)) - len(flags)}}  {dim(project)}")
+            project, language, san = "", "", ""
+        print(f"  {bug_id:<38s}  {language:<10s}  "
+              f"{cyan(san):<{12 + len(cyan(san)) - len(san)}}  {dim(project)}")
     print()
     return 0
 
@@ -53,7 +55,8 @@ def cmd_show(args) -> int:
     print()
     print(f"  {'bug_id':<18s} {bench.get('bug_id')}")
     print(f"  {'project':<18s} {bench.get('project')}")
-    print(f"  {'capability_set':<18s} {cyan(str(bench.get('capability_set')))}")
+    print(f"  {'language':<18s} {bench.get('language')}")
+    print(f"  {'sanitizer':<18s} {cyan(str(harness_sanitizer(bd)))}")
     print()
     desc = bd / "description.txt"
     if desc.exists():
@@ -252,7 +255,7 @@ def cmd_run(args) -> int:
         max_turns=args.max_turns, timeout=args.timeout, jobs=args.jobs,
         dashboard_pref=getattr(args, "dashboard", None),
         preserve_pocs=args.preserve_pocs,
-        stop_on_solve=getattr(args, "stop_on_solve", True),
+        stop_on_crash=getattr(args, "stop_on_crash", False),
         api_key=api_key,
         image_prefix=getattr(args, "image_prefix", None),
         report_only=getattr(args, "report_only", False),

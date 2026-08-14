@@ -27,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from fbbench.grading.bench_yaml import find_bug, capability_set      # noqa: E402
+from fbbench.grading.bench_yaml import find_bug      # noqa: E402
 from fbbench.runner.mcp_client import MCPClient, _full_scan_alias    # noqa: E402
 
 # bench.yaml keys that would point the agent at the upstream report / fix.
@@ -60,7 +60,6 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
     alias = _full_scan_alias(str(bd))
     res["alias"] = alias
     image = f"{image_prefix}{alias}"
-    kb = set(capability_set(bd))
     poc = pick_poc(bd)
 
     def ok(name, cond, detail=""):
@@ -115,11 +114,14 @@ def verify_one(bug: str, image_prefix: str, settle: float = 0.0) -> dict:
             d = m.call("exec", {"cmd": "base64 -d /workspace/poc.b64 > /workspace/poc.bin"})
             ok("poc_decoded", isinstance(d, dict) and d.get("exit_code") == 0, repr(d)[:120])
             v = m.call("run_poc_on_harness", {"path": "/workspace/poc.bin"})
-            caps = v.get("capabilities", {}) if isinstance(v, dict) else {}
-            fired = {k for k, vv in caps.items() if vv == "fired"}
-            res["fired"] = sorted(fired)
-            res["kb"] = sorted(kb)
-            ok("grade_fires", kb.issubset(fired), f"missing {sorted(kb - fired)}")
+            # MCPClient runs the image with BENCH_GRADE_REVEAL=1, so `crashed`
+            # is present. The reference PoC reproducibly crashing the baked
+            # harness is the whole claim an image has to answer for.
+            crashed = bool(v.get("crashed")) if isinstance(v, dict) else False
+            res["crashed"] = crashed
+            res["novelty"] = (v or {}).get("crash_novelty")
+            res["signature"] = (v or {}).get("crash_signature")
+            ok("grade_fires", crashed, f"reference PoC did not fault: {repr(v)[:160]}")
     except Exception as e:
         res["errors"].append("EXC: " + "".join(traceback.format_exception_only(type(e), e)).strip())
     finally:

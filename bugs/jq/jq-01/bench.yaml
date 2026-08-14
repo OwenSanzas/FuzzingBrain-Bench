@@ -6,4 +6,3 @@ harness:
   sanitizer: asan
   engine: libfuzzer
   invocation: ["-rss_limit_mb=0", "@@"]
-capability_set: [reach, crash, differential, class, site]

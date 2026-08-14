@@ -26,7 +26,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from fbbench.grading.bench_yaml import find_bug, capability_set  # noqa: E402
+from fbbench.grading.bench_yaml import find_bug  # noqa: E402
 from fbbench.runner.mcp_client import _full_scan_alias  # noqa: E402
 
 def self_contained(tag):

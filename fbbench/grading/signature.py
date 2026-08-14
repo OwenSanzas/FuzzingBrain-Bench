@@ -548,10 +548,9 @@ class Signature:
 def signature(harness_output: dict) -> Signature | None:
     """Signature for one harness run, or None if the output shows no fault.
 
-    `harness_output` is grade-core's per-round payload: {stdout, stderr,
-    exit_code, signal}. None here does NOT mean "no crash" — grade-core owns that
-    verdict. It means this output carries no marker we can name a crash by, and
-    the caller records the round as clean.
+    `harness_output` is one round's payload: {stdout, stderr, exit_code,
+    signal}. None here does NOT mean "no crash" — the grader owns that call. It
+    means this output carries no marker we can name a crash by.
     """
     if not isinstance(harness_output, dict):
         return None

@@ -16,9 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from fbbench.grading import (
-    DEFAULT_KB, capability_set, find_bug, graded_flags, list_bugs,
-)
+from fbbench.grading import list_bugs
 from fbbench.models import SUPPORTED_MODELS, default_sweep
 from fbbench.paths import REPO, resolve_output
 
@@ -58,29 +56,6 @@ def cell_dir(out: Path, bug: str, model: str, sample: int) -> Path:
     repeat this is, forwarded to the runner as --seed so one cell's repeats
     can be told apart."""
     return out / bug / model / f"seed-{sample}"
-
-
-def _seed_solved(s: dict) -> bool:
-    """Authoritative per-seed solve: a single candidate reproduced the full
-    target defect (score.solved). Falls back to this seed's own caps for older
-    runs that predate the field. NEVER a union across seeds or candidates."""
-    if "solved" in s:
-        return bool(s["solved"])
-    caps = s.get("capabilities", {})
-    applicable = {k: v for k, v in caps.items() if v != "n/a"}
-    return bool(applicable) and all(v == "fired" for v in applicable.values())
-
-
-def _denom(score: dict) -> int:
-    """Tier denominator for one cell: the rungs its bug is graded on, not 5."""
-    return len(graded_flags(score.get("capabilities") or {},
-                            (score.get("config") or {}).get("capability_set")))
-
-
-def bug_kb(bug: str) -> list[str]:
-    """The capability_set (required flags) for a bug, from its bench.yaml."""
-    bd = find_bug(bug)
-    return capability_set(bd) if bd else list(DEFAULT_KB)
 
 
 # The subprocess timeout is a BACKSTOP only: the episode owns its wall-clock
@@ -137,8 +112,8 @@ def _tidy_stderr_log(cd: Path) -> None:
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              timeout: int | None = None,
-             seed: int | None = None, batch: str | None = None,
-             preserve_pocs: bool = True, stop_on_solve: bool = False,
+             seed: int | None = None,
+             preserve_pocs: bool = True, stop_on_crash: bool = False,
              api_key: str | None = None, image_prefix: str | None = None,
              runner: list[str] | None = None) -> list[str]:
     """The exact `python -m fbbench.runner` argv for one cell. Single source of
@@ -149,11 +124,9 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
         cmd += ["--timeout", str(timeout)]
     if seed is not None:
         cmd += ["--seed", str(seed)]
-    if batch:
-        cmd += ["--batch", batch]
     cmd.append("--preserve-pocs" if preserve_pocs else "--no-preserve-pocs")
-    if not stop_on_solve:
-        cmd.append("--no-stop-on-solve")
+    if not stop_on_crash:
+        cmd.append("--no-stop-on-crash")
     if api_key:
         cmd += ["--api-key", api_key]
     if image_prefix:
@@ -163,20 +136,20 @@ def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
 
 def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
              timeout: int, preserve_pocs: bool = True, *,
-             stop_on_solve: bool = False, api_key: str | None = None,
+             stop_on_crash: bool = False, api_key: str | None = None,
              image_prefix: str | None = None,
              runner: list[str] | None = None,
-             batch: str | None = None) -> dict | None:
+             ) -> dict | None:
     cd = cell_dir(out, bug, model, sample)
     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
-                   seed=sample, batch=batch,
-                   preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
+                   seed=sample,
+                   preserve_pocs=preserve_pocs, stop_on_crash=stop_on_crash,
                    api_key=api_key, image_prefix=image_prefix,
                    runner=runner)
     cd.mkdir(parents=True, exist_ok=True)
     try:
         # The episode self-stops at `timeout`; SIGKILL only if it overruns the
-        # graceful-writeout backstop (so a solved run isn't lost to the killer).
+        # graceful-writeout backstop (so a finished run isn't lost to the killer).
         with (cd / _STDERR_LOG).open("wb") as errlog:
             subprocess.run(cmd, cwd=REPO, timeout=timeout + _SUBPROC_BACKSTOP_S,
                            stdout=subprocess.DEVNULL, stderr=errlog)
@@ -190,49 +163,28 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
 
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
-
-    # The five-rung ladder is the ORACLE's verdict. A locally-graded sweep never
-    # computes it, and printing five zero columns would read as "the model failed
-    # every rung" rather than "nothing measured this". So the columns appear only
-    # when some cell actually recorded a ladder.
-    graded_ladder = any(
-        (cell_dir(out, bug, model, seed) / "score.json").is_file()
-        and json.loads((cell_dir(out, bug, model, seed) / "score.json").read_text()
-                       ).get("capabilities")
-        for model in models for bug in bugs for seed in seeds)
-
+    """Print the per-model leaderboard: distinct crashes, coverage, cost."""
     print("\n" + "=" * 78)
-    if graded_ladder:
-        print(f"  {'model':24s} {'uniqCr':>7s} {'solved':>7s} {'reach':>6s} {'crash':>6s} {'diff':>7s} "
-              f"{'class':>6s} {'site':>6s} {'refus':>6s} {'cost$':>8s}")
-    else:
-        print(f"  {'model':24s} {'uniqCr':>7s} {'chall':>7s} {'refus':>6s} {'cost$':>8s}")
+    print(f"  {'model':24s} {'uniqCr':>7s} {'chall':>7s} {'crashed':>8s} "
+          f"{'refus':>6s} {'cost$':>8s}")
     print("  " + "-" * 90)
     for model in models:
-        agg = {"reach": 0, "crash": 0, "differential": 0, "class": 0, "site": 0}
-        solved = refusals = n = 0
-        crashes = 0  # headline: total DISTINCT crashes (best-of-seeds per bug, summed)
+        refusals = n = crashed_on = 0
+        crashes = 0   # headline: DISTINCT crashes, best-of-seeds per bug, summed
         cost = 0.0
         for bug in bugs:
-            # Coverage columns are best-of-seeds per rung (did the model ever
-            # reach/crash/... on this bug). Solved is NOT a union: it is whether
-            # some SINGLE seed authoritatively solved (score.solved) — a union of
-            # rungs across seeds would fake a solve no single attempt achieved.
-            caps = {"reach": False, "crash": False, "differential": False, "class": False, "site": False}
             seen = False
-            bug_solved = False
-            bug_crashes = 0  # best (max) distinct-crash count across this bug's seeds
+            # Best (max) across this bug's seeds, never the sum: repeats measure
+            # consistency, not capability, so summing would make the score a
+            # function of how many samples were bought.
+            bug_crashes = 0
             for seed in seeds:
                 sj = cell_dir(out, bug, model, seed) / "score.json"
                 if not sj.is_file():
                     continue
                 seen = True
                 s = json.loads(sj.read_text())
-                for k in caps:
-                    if s.get("capabilities", {}).get(k) == "fired":
-                        caps[k] = True
                 bug_crashes = max(bug_crashes, int(s.get("unique_crashes", 0)))
-                bug_solved = bug_solved or _seed_solved(s)
                 if s.get("terminated_reason") == "refusal":
                     refusals += 1
                 if s.get("total_usd"):
@@ -241,19 +193,10 @@ def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -
                 continue
             n += 1
             crashes += bug_crashes
-            for k in agg:
-                agg[k] += int(caps[k])
-            if bug_solved:
-                solved += 1
-        uniq = f"{crashes}"
-        if graded_ladder:
-            print(f"  {model:24s} {uniq:>7s} {f'{solved}/{n}':>7s} {agg['reach']:>6d} "
-                  f"{agg['crash']:>6d} {agg['differential']:>7d} {agg['class']:>6d} {agg['site']:>6d} "
-                  f"{refusals:>6d} {cost:>8.2f}")
-        else:
-            # `solved` needs the answer key too, so it goes with the ladder; what
-            # is left is how many challenges the model was run against.
-            print(f"  {model:24s} {uniq:>7s} {n:>7d} {refusals:>6d} {cost:>8.2f}")
+            if bug_crashes:
+                crashed_on += 1
+        print(f"  {model:24s} {crashes:>7d} {n:>7d} {crashed_on:>8d} "
+              f"{refusals:>6d} {cost:>8.2f}")
     print("=" * 90)
 
 
@@ -274,7 +217,7 @@ def _write_summary(out: Path, models: list[str], bugs: list[str], seeds: list[in
 def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                output: str | None = None, max_turns: int = 100, timeout: int = 1800,
                jobs: int = 1, dashboard_pref: bool | None = None,
-               preserve_pocs: bool = True, stop_on_solve: bool = False,
+               preserve_pocs: bool = True, stop_on_crash: bool = False,
                api_key: str | None = None, image_prefix: str | None = None,
                  report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
@@ -328,11 +271,6 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
     print(f"  {len(models)} model(s) x {len(bugs)} bug(s) x {samples} sample(s) "
           f"= {len(cells)} cell(s) ({done} already done, {len(cells)-done} to run)")
 
-    # No batch id. It existed to group submissions on a grading service that no
-    # longer takes any — every image grades in-image — and nothing in the report
-    # depends on the grouping.
-    batch_uid = ""
-
     from rich.console import Console
     from fbbench.sweep.dashboard import STATUS, dashboard, run_cell_tailing
     console = Console()
@@ -346,13 +284,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
         print(f"  note: the live dashboard is not available for --arm {arm} yet — "
               f"using line-by-line logs (per-cell transcript + report are still produced).",
               flush=True)
-    # The self-contained images grade in-image and produce no ladder. Passed as
-    # the opening expectation only — the cells correct it as soon as one lands.
     STATUS.configure(exp=out.name, models=models, bugs=bugs, samples=seeds,
-                     max_turns=max_turns, total=len(cells), already_done=done,
-                     # No image computes a ladder — the rungs past `crash` need
-                     # an answer key and none ships one.
-                     expect_ladder=False)
+                     max_turns=max_turns, total=len(cells), already_done=done)
 
     def _cell(model, bug, sample):
         # Per-cell dispatch by arm — every arm writes score.json into the SAME
@@ -378,9 +311,9 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                                            timeout, max_turns, auth=auth, api_key=api_key,
                                            preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
-                            preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
+                            preserve_pocs=preserve_pocs, stop_on_crash=stop_on_crash,
                             api_key=api_key, image_prefix=image_prefix, runner=runner,
-                            batch=batch_uid)
+                            )
         except Exception as e:  # noqa: BLE001
             import traceback
             traceback.print_exc()
@@ -427,14 +360,13 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 if (cd / "score.json").is_file():
                     STATUS.cell_skip(model, bug, sample)
                     continue
-                kb = bug_kb(bug)
                 tag = f"[{i}/{len(cells)}] {model} / {bug} / sample-{sample}"
                 if use_dash:
-                    STATUS.cell_start(model, bug, sample, kb)
+                    STATUS.cell_start(model, bug, sample)
                     cmd = cell_cmd(model, bug, cd, max_turns, timeout=timeout,
-                                   seed=sample, batch=batch_uid,
+                                   seed=sample,
                                    preserve_pocs=preserve_pocs,
-                                   stop_on_solve=stop_on_solve,
+                                   stop_on_crash=stop_on_crash,
                                    api_key=api_key, image_prefix=image_prefix, runner=runner)
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)

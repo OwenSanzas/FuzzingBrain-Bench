@@ -1,4 +1,4 @@
-"""FuzzingBrain Bench — a capability-ladder benchmark for LLM-driven
+"""FuzzingBrain Bench — a benchmark for LLM-driven
 vulnerability reproduction on real C / C++ / Java open-source bugs.
 
 Public surface:

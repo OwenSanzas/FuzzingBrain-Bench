@@ -59,7 +59,7 @@ def _grade_out(result: dict) -> tuple[str, bool]:
     # Mirror the in-image grader's crashFired guard (gradelocal.go): a bare
     # terminating signal with NO output is the kernel-6.17 ASan startup flake,
     # not an input-triggered crash — so it must NOT be marked as a fault here,
-    # or the trajectory's 💥 would contradict a not_fired score.
+    # or the trajectory's 💥 would contradict the run's crash count.
     has_output = bool(stderr.strip()) or bool(stdout.strip())
     crash = bool(m) or (bool(sig) and has_output)
     parts = [f"exit={exit_code}"]

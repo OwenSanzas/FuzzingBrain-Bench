@@ -6,4 +6,3 @@ harness:
   sanitizer: ubsan
   engine: libfuzzer
   invocation: ["-rss_limit_mb=1024", "@@"]
-capability_set: [crash, differential, class]

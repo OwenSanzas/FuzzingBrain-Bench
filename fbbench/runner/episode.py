@@ -1,7 +1,8 @@
 """Provider-neutral episode driver for FuzzingBrain Bench.
 
-One episode = one (backend, bug, seed). We bridge the 6 MCP tools onto the
-neutral Backend contract, drive the loop up to the turn budget, and write
+One episode = one (backend, bug, seed). We bridge the 3 MCP tools
+(setup / exec / run_poc_on_harness) onto the neutral Backend contract, drive the
+loop up to the turn budget, and write
 episode.jsonl / score.json / cost.json (the latter two by the caller).
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from fbbench.prompts import (
     budget_note, build_initial_user_message, system_prompt,
 )
 from dataclasses import replace
-from fbbench.grading.bench_yaml import DEFAULT_KB, harness_sanitizer
+from fbbench.grading.bench_yaml import harness_sanitizer
 from fbbench.grading.signature import signature as crash_signature
 from fbbench.models.catalog import context_window
 from fbbench.runner.backends.base import Backend, Completion, ToolResult
@@ -274,29 +275,20 @@ def run_episode(
     time_budget_s: float | None = None,
     episode_log: str | None = None,
     oracle_dir: str | None = None,
-    capability_set: list[str] | None = None,
     pocs_dir: str | None = None,
-    stop_on_solve: bool = False,
-    mode: str = "full-scan",
+    stop_on_crash: bool = False,
 ) -> EpisodeResult:
     mcp = MCPClient(bug_dir=bug_dir, workspace=workspace, image=image)
     mcp.initialize()
-    kb: set[str] = set(capability_set or DEFAULT_KB)
     poc_root: Path | None = Path(pocs_dir) if pocs_dir else None
     grade_idx = 0
     setup_resp = mcp.call("setup", {})
     # Read the sanitizer from the LOCAL bundle: in the canonical path bug_dir is a
     # container path ("/src"); the host-side bug bundle is oracle_dir.
     backfill_sanitizer(setup_resp, oracle_dir or bug_dir)
-    # The mode selects only the FIRST user turn; the system prompt is the same
-    # (blind) text for every mode. full-scan is the one active public mode;
-    # diffscan (delta-N) is a reserved extension point (see prompts.py).
-    if mode == "full-scan":
-        user_text = build_initial_user_message(setup_resp)
-    elif mode == "diffscan":
-        raise NotImplementedError("diff-scan (delta-N) mode is not implemented")
-    else:
-        raise ValueError(f"unknown mode: {mode!r} (expected full-scan | diffscan)")
+    # Blind: the agent gets the harness and the source at the vulnerable
+    # revision and nothing else.
+    user_text = build_initial_user_message(setup_resp)
     sysp = system_prompt()
 
     messages: list[dict] = [{"role": "user", "content": user_text}]
@@ -332,12 +324,11 @@ def run_episode(
             return payload
 
     log({"event": "start", "model": backend.model, "bug_id": bug_id,
-         "capability_set": sorted(kb),
          "preserve_pocs": bool(poc_root),
          "system_prompt_chars": len(sysp)})
 
     tlog({"event": "start", "model": backend.model, "bug_id": bug_id,
-          "capability_set": sorted(kb), "max_turns": max_turns,
+          "max_turns": max_turns,
           "preserve_pocs": bool(poc_root),
           "system_prompt": sysp,
           "initial_user_message": user_text,
@@ -405,7 +396,7 @@ def run_episode(
             # A refusal / malformed-function-call means we got NO usable reply
             # (an API-level safety refusal or a parse failure), not a task
             # outcome — so re-draw up to 3 attempts to obtain a valid completion.
-            # (Task-level flaky knobs — truncation, grade rounds — stay at 1.)
+            # (The task-level truncation retry is separate and stays at 1.)
             for attempt in range(3):
                 if comp.tool_calls or not (_is_refusal(comp) or _is_malformed(comp)):
                     break
@@ -523,6 +514,13 @@ def run_episode(
                     sealed = {"harness_output": out.get("harness_output", {})}
                     if out.get("crash_novelty"):
                         sealed["crash_novelty"] = out["crash_novelty"]
+                        # The evidence behind the verdict. Without it a
+                        # `flaky_rounds` reads as an unexplained rejection, and
+                        # the agent cannot tell "2 of 3" from "1 of 3" when
+                        # deciding whether to keep pushing on this input.
+                        for k in ("crashed_rounds", "total_rounds", "distinct_crashes"):
+                            if out.get(k) is not None:
+                                sealed[k] = out[k]
                     payload = json.dumps(sealed)
                 else:
                     payload = json.dumps(out)
@@ -565,13 +563,12 @@ def run_episode(
             # (Context compaction now runs PRE-call in complete_once, so a turn's
             # freshly-appended tool results can't overflow the next call before we
             # get a chance to compact. Nothing to do here.)
-            # Stop-on-solve (default; disable with --no-stop-on-solve): a single
             # A crash is the find — there is no answer key to say whether it is
             # THE defect, so the first one is where an episode can stop if the
-            # operator asked it to. Off by default, so an episode instead keeps
-            # hunting for more DISTINCT crashes until the agent stops
-            # (ASSESSMENT COMPLETE) or the budget runs out.
-            if crashed_hit and stop_on_solve:
+            # operator asked it to (--stop-on-crash). Off by default, so an
+            # episode instead keeps hunting for more DISTINCT crashes until the
+            # agent stops (ASSESSMENT COMPLETE) or the budget runs out.
+            if crashed_hit and stop_on_crash:
                 result.terminated_reason = "crashed"
                 log({"event": "crashed", "turn": turn})
                 tlog({"event": "crashed", "turn": turn})
