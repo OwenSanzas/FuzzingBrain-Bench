@@ -28,7 +28,7 @@ named by neutral alias (`<project>-NN`, e.g. `avro-03`), and the answer key
 ### 1. Setup
 
 ```bash
-git clone https://github.com/OwenSanzas/FuzzingBrain-Bench
+git clone https://github.com/fuzzingbrain/FuzzingBrain-Bench
 cd FuzzingBrain-Bench
 
 python3 -m venv .venv && source .venv/bin/activate   # recommended (and required on
@@ -73,14 +73,14 @@ fb-bench run avro-03 --model claude-haiku-4-5
 fb-bench run avro-03 --model gpt-5.5
 
 # Gemini family
-fb-bench run avro-03 --model gemini-3-pro-preview
+fb-bench run avro-03 --model gemini-3.1-pro-preview
 
 # DeepSeek family  (OpenAI-compatible endpoint; needs DEEPSEEK_API_KEY)
 fb-bench run avro-03 --model deepseek-v4-flash
 ```
 
-Models: `claude-haiku-4-5` · `claude-sonnet-4-6` · `claude-opus-4-7` ·
-`gpt-5.5` · `gpt-5.4` · `gpt-5` · `gemini-3-pro-preview` · `gemini-2.5-flash` ·
+Models: `claude-haiku-4-5` · `claude-sonnet-4-6` · `claude-opus-4-8` ·
+`gpt-5.5` · `gpt-5.4` · `gpt-5` · `gemini-3.1-pro-preview` · `gemini-2.5-flash` ·
 `deepseek-v4-pro` · `deepseek-v4-flash`
 (any catalog id works via `--model`; see `fb-bench models`).
 
@@ -194,9 +194,8 @@ somewhere different each time comes back `flaky_location`. Neither scores, and
 
 Each challenge carries a difficulty coefficient **D (1–5)** from a **frozen**
 table (`fbbench/report/difficulty.json`), measured once from a fixed 3-model
-panel by [fbbench-difficulty](https://github.com/OwenSanzas/fbbench-difficulty).
-D is read off two facts: how much of the panel crashed the challenge at all, and
-how freely it gave crashes up to whoever did.
+panel. D is read off two facts: how much of the panel crashed the challenge at
+all, and how freely it gave crashes up to whoever did.
 
 ```
 D5   nobody crashed it
@@ -270,7 +269,7 @@ verifier live in [`tools/sealed/`](tools/sealed/) — anyone can audit that no
 answer key ships with an image:
 
 ```bash
-python tools/sealed/verify_sealed.py docker.io/osanzas/fbbench-challenge-avro-03:latest
+python tools/sealed/verify_sealed.py --only avro-03
 ```
 
 ## What's in this repo

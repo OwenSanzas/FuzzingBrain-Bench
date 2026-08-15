@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/OwenSanzas/FuzzingBrain-Bench"
+Repository = "https://github.com/fuzzingbrain/FuzzingBrain-Bench"
 
 [project.scripts]
 fb-bench = "fbbench.cli.main:main"

@@ -34,7 +34,12 @@ def resolve_models(spec: str) -> list[str]:
         return default_sweep()
     if spec == "all":
         return SUPPORTED_MODELS
-    return [m.strip() for m in spec.split(",") if m.strip()]
+    want = [m.strip() for m in spec.split(",") if m.strip()]
+    unknown = [m for m in want if m not in SUPPORTED_MODELS]
+    if unknown:
+        sys.exit(f"unknown model(s): {', '.join(unknown)} "
+                 f"(see `fb-bench models`)")
+    return want
 
 
 def resolve_bugs(spec: str) -> list[str]:

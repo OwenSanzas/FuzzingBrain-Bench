@@ -1,5 +1,5 @@
 {
-  "_doc": "Per-challenge difficulty coefficient D (1..5), measured from a frozen 3-model panel by fbbench-difficulty. D is read off two facts: how much of the panel crashed the challenge at all, and how freely it gave crashes up to whoever did. FROZEN: recomputing it silently would change every historical score, so it is a fixed table that new runs are quoted against, not something a run derives from itself.",
+  "_doc": "Per-challenge difficulty coefficient D (1..5), measured from a frozen 3-model panel. D is read off two facts: how much of the panel crashed the challenge at all, and how freely it gave crashes up to whoever did. FROZEN: recomputing it silently would change every historical score, so it is a fixed table that new runs are quoted against, not something a run derives from itself.",
   "version": "v2",
   "rule": [
     {

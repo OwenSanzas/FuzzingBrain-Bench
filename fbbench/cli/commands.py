@@ -242,7 +242,10 @@ def cmd_run(args) -> int:
                              "in ./.env or --api-key (or use --auth sub)"))
 
     # ---- resolve bug(s): one | csv | all (validates, exits on unknown) ----
-    bugs = resolve_bugs(args.bugs)
+    # argv arrives pre-split when the shell saw whitespace ("a, b" -> ["a,", "b"]);
+    # rejoining on commas makes spacing around the separators irrelevant, since
+    # resolve_bugs strips each fragment and drops the empties.
+    bugs = resolve_bugs(",".join(args.bugs))
 
     # The runner subprocess runs in whatever interpreter has the deps: a dev
     # checkout's .venv if present, else the current interpreter (pip-installed).

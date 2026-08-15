@@ -111,7 +111,6 @@ class SweepStatus:
             self.already_done = already_done
             self.t0 = time.time()
 
-    @property
     # ---- mutators -------------------------------------------------------
     def _cell(self, model: str, bug: str, sample: int) -> Cell:
         key = (model, bug, sample)
