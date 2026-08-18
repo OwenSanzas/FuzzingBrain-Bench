@@ -474,12 +474,22 @@ def run_cell_tailing(cmd: list[str], cwd: str, timeout: int, episode_path: Path,
     except FileNotFoundError:
         pass
 
+    # stderr goes to a FILE, not a pipe: this loop never read the pipe, so a
+    # dying cell's traceback was discarded (the dashboard then showed only "no
+    # score.json") and a child that out-wrote the pipe buffer would block here
+    # until the backstop killed it. Same log name + failure summary as the plain
+    # path, so both cell paths fail identically.
+    from fbbench.sweep.orchestrator import (
+        _SUBPROC_BACKSTOP_S, _STDERR_LOG, _cell_failure, _tidy_stderr_log,
+    )
+    cd = episode_path.parent
+    cd.mkdir(parents=True, exist_ok=True)
+    errlog = (cd / _STDERR_LOG).open("wb")
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE)
+                            stderr=errlog)
     # The episode owns its --timeout budget and self-stops to write score.json;
     # this killer is only a backstop, so give it the same graceful headroom the
     # plain run_cell path uses (orchestrator._SUBPROC_BACKSTOP_S).
-    from fbbench.sweep.orchestrator import _SUBPROC_BACKSTOP_S
     deadline = time.time() + timeout + _SUBPROC_BACKSTOP_S
     pos = 0
     buf = ""
@@ -516,10 +526,14 @@ def run_cell_tailing(cmd: list[str], cwd: str, timeout: int, episode_path: Path,
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
+    errlog.close()
     if killed:
-        return {"error": "timeout"}
+        return {"error": "timeout", "error_log": str(cd / _STDERR_LOG)}
     sj = episode_path.with_name("score.json")
-    return json.loads(sj.read_text()) if sj.is_file() else {"error": "no score.json"}
+    if sj.is_file():
+        _tidy_stderr_log(cd)
+        return json.loads(sj.read_text())
+    return _cell_failure(cd)
 
 
 def _preview(static: bool = False) -> None:

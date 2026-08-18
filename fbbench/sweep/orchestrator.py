@@ -89,6 +89,51 @@ def bug_kb(bug: str) -> list[str]:
 # teardown before we SIGKILL it out from under a hung run.
 _SUBPROC_BACKSTOP_S = 180
 
+# Where a cell's runner subprocess sends its stderr. Both cell paths (plain and
+# dashboard-tailing) send it to a FILE rather than a pipe, because nobody read
+# the pipe: the output was discarded on success and LOST on failure, and a child
+# that wrote more than the pipe buffer would block until the backstop killed it.
+# A cell that dies before writing score.json (docker unreachable, bad API key,
+# image pull refused) reported only "no score.json" — the symptom, with the
+# actual cause thrown away.
+_STDERR_LOG = "runner.stderr.log"
+
+
+def _cell_failure(cd: Path) -> dict:
+    """Why this cell produced no score.json, read back from its stderr log.
+
+    The last non-empty line is the useful one: a Python traceback ends with its
+    exception line and a failing CLI ends with its message. The whole log stays
+    on disk beside the cell, so this one-liner can stay short enough for the
+    dashboard's `recent` row while the full trace is one `cat` away.
+    """
+    log = cd / _STDERR_LOG
+    try:
+        lines = [ln.strip() for ln in log.read_text(errors="replace").splitlines()
+                 if ln.strip()]
+    except OSError:
+        lines = []
+    if not lines:
+        return {"error": "no score.json (the runner wrote nothing to stderr)"}
+    return {"error": lines[-1][:300], "error_log": str(log)}
+
+
+def _failed_line(r: dict | None) -> str:
+    """The one-line reason a cell failed, plus where to read the whole thing."""
+    msg = (r or {}).get("error") or "unknown"
+    log = (r or {}).get("error_log")
+    return f"FAILED: {msg}" + (f"\n         log: {log}" if log else "")
+
+
+def _tidy_stderr_log(cd: Path) -> None:
+    """Drop an empty stderr log — a cell that ran clean leaves no debris."""
+    log = cd / _STDERR_LOG
+    try:
+        if log.stat().st_size == 0:
+            log.unlink()
+    except OSError:
+        pass
+
 
 def cell_cmd(model: str, bug: str, cd: Path, max_turns: int, *,
              timeout: int | None = None,
@@ -128,15 +173,20 @@ def run_cell(model: str, bug: str, sample: int, max_turns: int, out: Path,
                    preserve_pocs=preserve_pocs, stop_on_solve=stop_on_solve,
                    api_key=api_key, image_prefix=image_prefix,
                    runner=runner)
+    cd.mkdir(parents=True, exist_ok=True)
     try:
         # The episode self-stops at `timeout`; SIGKILL only if it overruns the
         # graceful-writeout backstop (so a solved run isn't lost to the killer).
-        subprocess.run(cmd, cwd=REPO, timeout=timeout + _SUBPROC_BACKSTOP_S,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        with (cd / _STDERR_LOG).open("wb") as errlog:
+            subprocess.run(cmd, cwd=REPO, timeout=timeout + _SUBPROC_BACKSTOP_S,
+                           stdout=subprocess.DEVNULL, stderr=errlog)
     except subprocess.TimeoutExpired:
-        return {"error": "timeout"}
+        return {"error": "timeout", "error_log": str(cd / _STDERR_LOG)}
     sj = cd / "score.json"
-    return json.loads(sj.read_text()) if sj.is_file() else {"error": "no score.json"}
+    if sj.is_file():
+        _tidy_stderr_log(cd)
+        return json.loads(sj.read_text())
+    return _cell_failure(cd)
 
 
 def aggregate(out: Path, models: list[str], bugs: list[str], seeds: list[int]) -> None:
@@ -338,6 +388,12 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
 
     jobs = max(1, jobs)
     t0 = time.time()
+    # Cells that never produced a score.json, with the reason their runner gave.
+    # Reprinted after the run because the live dashboard tears its panels down,
+    # taking the only on-screen copy of the error with it — which is how a run
+    # where every cell died on the same fault still ended in a clean-looking
+    # all-zeros leaderboard.
+    failures: list[tuple[str, str, int, dict | None]] = []
 
     if jobs > 1:
         # Parallel: each cell is an independent subprocess + Docker container,
@@ -358,7 +414,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                       f"{r.get('terminated_reason','')}  ${r.get('total_usd') or 0.0:.4f}",
                       flush=True)
             else:
-                print(f"      -> [{bug}] FAILED: {r.get('error') if r else 'unknown'}", flush=True)
+                print(f"      -> [{bug}] {_failed_line(r)}", flush=True)
+                failures.append((model, bug, sample, r))
             return r
 
         with ThreadPoolExecutor(max_workers=jobs) as ex:
@@ -382,6 +439,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                     r = run_cell_tailing(cmd, str(REPO), timeout,
                                          cd / "episode.jsonl", model, bug, sample)
                     STATUS.cell_finish(model, bug, sample, r)
+                    if not r or "error" in r:
+                        failures.append((model, bug, sample, r))
                 else:
                     print(f"  {tag} ...", flush=True)
                     r = _cell(model, bug, sample)
@@ -389,7 +448,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                         print(f"      -> {r.get('unique_crashes','?')} crashes  {r.get('terminated_reason','')}  "
                               f"${r.get('total_usd') or 0.0:.4f}", flush=True)
                     else:
-                        print(f"      -> FAILED: {r.get('error') if r else 'unknown'}", flush=True)
+                        print(f"      -> {_failed_line(r)}", flush=True)
+                        failures.append((model, bug, sample, r))
 
     elapsed = time.time() - t0
     spent = STATUS.total_cost
@@ -405,6 +465,13 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                         except (OSError, ValueError):
                             pass
     print(f"\n  done in {elapsed:.0f}s, spent ~${spent:.2f} total (all cells on disk)")
+    if failures:
+        print(f"\n  {len(failures)} cell(s) produced no score.json:")
+        for model, bug, sample, r in failures:
+            print(f"    {bug} / {model} / sample-{sample}")
+            print(f"      {(r or {}).get('error') or 'unknown'}")
+            if (r or {}).get("error_log"):
+                print(f"      log: {r['error_log']}")
     aggregate(out, models, bugs, seeds)
 
     _write_summary(out, models, bugs, seeds, max_turns, elapsed_s=elapsed)
