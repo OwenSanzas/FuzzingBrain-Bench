@@ -83,13 +83,20 @@ class AnthropicBackend:
         return sys_param, tools_param, blocks
 
     def _stream_once(self, system, api_tools, blocks, max_tokens):
+        # No `temperature`. It used to be passed as 1.0, which is the API's own
+        # default, so nothing about sampling changes by dropping it -- but the
+        # parameter itself is gone. Anthropic removed the sampling knobs
+        # (temperature / top_p / top_k) on the current models, and the SDK
+        # followed by dropping them from the method signature, so a client new
+        # enough to have that signature raised TypeError before a request was
+        # ever sent: "Messages.stream() got an unexpected keyword argument
+        # 'temperature'". Every cell died the same way, on any model.
         with self._client.messages.stream(
             model=self.model,
             max_tokens=max_tokens,
             system=system,
             tools=api_tools,
             messages=blocks,
-            temperature=1.0,
             metadata={"user_id": "fbbench"},
         ) as stream:
             return stream.get_final_message()
