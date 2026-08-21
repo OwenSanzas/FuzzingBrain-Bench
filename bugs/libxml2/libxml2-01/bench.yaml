@@ -7,4 +7,3 @@ harness:
   engine: libfuzzer
   invocation: ["@@"]
 
-capability_set: [class, crash, differential, reach, site]

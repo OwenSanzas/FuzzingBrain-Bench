@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fuzzingbrain-bench"
 version = "1.0.0"
-description = "A capability-ladder benchmark for LLM-driven vulnerability reproduction on real C / C++ / Java open-source bugs."
+description = "A benchmark for LLM-driven vulnerability reproduction on real C / C++ / Java open-source bugs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/OwenSanzas/FuzzingBrain-Bench"
+Repository = "https://github.com/fuzzingbrain/FuzzingBrain-Bench"
 
 [project.scripts]
 fb-bench = "fbbench.cli.main:main"

@@ -10,7 +10,7 @@ from __future__ import annotations
 # build affordable default sweeps. Order is flagship -> fast within a provider.
 CATALOG: list[tuple[str, str, str]] = [
     # Anthropic
-    ("claude-opus-4-7",          "anthropic", "flagship"),
+    ("claude-opus-4-8",          "anthropic", "flagship"),
     ("claude-sonnet-4-6",        "anthropic", "mid"),
     ("claude-haiku-4-5",         "anthropic", "fast"),
     # OpenAI
@@ -64,6 +64,9 @@ DEFAULT_CONTEXT_WINDOW = 128_000
 # vendor's published spec — cross-verified against official docs (see
 # tools/model_context_windows.csv for sources). NOT pure-input capacity.
 CONTEXT_WINDOWS: dict[str, int] = {
+    # 4-8 mirrors 4-7 pending a sourced row in tools/model_context_windows.csv;
+    # the CSV documents 4-7 only. Same treatment pricing.py already gives it.
+    "claude-opus-4-8":        1_000_000,
     "claude-opus-4-7":        1_000_000,
     "claude-sonnet-4-6":      1_000_000,
     "claude-haiku-4-5":         200_000,
@@ -127,7 +130,7 @@ PROVIDER_KEY_ENV = {
 # Default model per provider, chosen when the user did not pass --model:
 # the cheapest flagship/mid tier per provider — a sane "just works" start.
 PROVIDER_DEFAULT = {
-    "anthropic":  "claude-opus-4-7",
+    "anthropic":  "claude-opus-4-8",
     "openai":     "gpt-5.5",
     "gemini":     "gemini-3-pro-preview",
     "deepseek":   "deepseek-v4-flash",

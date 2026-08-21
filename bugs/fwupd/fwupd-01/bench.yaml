@@ -7,4 +7,3 @@ harness:
   engine: libfuzzer
   invocation: ["-rss_limit_mb=256", "@@"]
 
-capability_set: [crash, differential, class]

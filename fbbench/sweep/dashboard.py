@@ -32,13 +32,7 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 
-from fbbench.grading import graded_flags
 from rich.text import Text
-
-# The capability ladder, strongest-last, with the single-letter column heads
-# used in the compact ladder cell. Mirrors fbbench.cli.console.TIERS.
-LADDER = ["reach", "crash", "differential", "class", "site"]
-LADDER_HEADS = {"reach": "R", "crash": "C", "differential": "D", "class": "K", "site": "S"}
 
 # phase -> (glyph, rich style). Ordered roughly by lifecycle progression.
 _PHASE_STYLE: dict[str, tuple[str, str]] = {
@@ -72,14 +66,7 @@ class Cell:
     max_turns: int = 0
     tool: str = ""                  # tool of the most recent tool_result
     grades: int = 0                 # number of run_poc_on_harness() calls so far
-    kb: list[str] = field(default_factory=list)   # capability_set (applicable flags)
-    caps: dict[str, str] = field(default_factory=dict)  # flag -> fired/not_fired/n-a
-    solved_val: bool | None = None  # authoritative solve (score.solved); None = unknown
-    tier: int = 0
     crashes: int = 0                # distinct crashes this cell produced
-    # Whether a ladder verdict exists for this cell. None until it finishes;
-    # False for everything current — no image computes one.
-    has_ladder: bool | None = None
     cost: float = 0.0
     reason: str = ""                # terminated_reason
     error: str = ""
@@ -89,21 +76,6 @@ class Cell:
     @property
     def key(self) -> tuple[str, str, int]:
         return (self.model, self.bug, self.sample)
-
-    @property
-    def n_graded(self) -> int:
-        """How many rungs THIS bug is graded on — never assume the full ladder."""
-        return len(graded_flags(self.caps, self.kb))
-
-    @property
-    def solved(self) -> bool:
-        # Authoritative: a single candidate reproduced the full target defect
-        # (score.solved). Fall back to the caps for older runs that predate the
-        # field. NEVER a sticky union across candidates.
-        if self.solved_val is not None:
-            return self.solved_val
-        ks = self.kb or LADDER
-        return bool(self.caps) and all(self.caps.get(k) == "fired" for k in ks)
 
 
 class SweepStatus:
@@ -128,8 +100,7 @@ class SweepStatus:
     # ---- configuration --------------------------------------------------
     def configure(self, *, exp: str, models: list[str], bugs: list[str],
                   samples: list[int], max_turns: int,
-                  total: int, already_done: int,
-                  expect_ladder: bool = True) -> None:
+                  total: int, already_done: int) -> None:
         with self._lock:
             self.exp = exp
             self.models = models
@@ -138,24 +109,7 @@ class SweepStatus:
             self.max_turns = max_turns
             self.total = total
             self.already_done = already_done
-            # What to draw before the first cell reports. Derived from the image
-            # tag, then corrected by the cells themselves — the data wins as soon
-            # as there is any.
-            self.expect_ladder = expect_ladder
             self.t0 = time.time()
-
-    @property
-    def show_ladder(self) -> bool:
-        """Whether this sweep has a ladder to show — archived runs only.
-
-        Answered by the cells once any has finished. A current run records no
-        capabilities, and five dim rungs plus "0/5" would read as a sweep that
-        failed everything rather than one that measured distinct crashes. Until
-        then it falls back to the opening expectation, so the table does not
-        change shape halfway through.
-        """
-        seen = [c.has_ladder for c in self._cells.values() if c.has_ladder is not None]
-        return any(seen) if seen else getattr(self, "expect_ladder", True)
 
     # ---- mutators -------------------------------------------------------
     def _cell(self, model: str, bug: str, sample: int) -> Cell:
@@ -167,11 +121,10 @@ class SweepStatus:
             self._order.append(key)
         return c
 
-    def cell_start(self, model: str, bug: str, sample: int, kb: list[str]) -> None:
+    def cell_start(self, model: str, bug: str, sample: int) -> None:
         with self._lock:
             c = self._cell(model, bug, sample)
             c.phase = "running"
-            c.kb = kb
             c.t_start = time.time()
             self.log(f"▶ {bug} · {model} · sample-{sample}", "magenta")
 
@@ -187,9 +140,7 @@ class SweepStatus:
                 if c.tool == "run_poc_on_harness":
                     c.grades += 1
             elif kind == "end":
-                c.caps = ev.get("capabilities", c.caps)
-                if "solved" in ev:
-                    c.solved_val = bool(ev["solved"])
+                c.crashes = int(ev.get("unique_crashes", c.crashes))
                 c.reason = ev.get("terminated_reason", c.reason)
                 c.turn = int(ev.get("turns_used", c.turn))
 
@@ -198,11 +149,6 @@ class SweepStatus:
             c = self._cell(model, bug, sample)
             c.t_end = time.time()
             if score and "error" not in score:
-                c.caps = score.get("capabilities", c.caps)
-                c.has_ladder = bool(score.get("capabilities"))
-                if "solved" in score:
-                    c.solved_val = bool(score["solved"])
-                c.tier = int(score.get("tier_score", 0))
                 c.crashes = int(score.get("unique_crashes", 0))
                 c.cost = float(score.get("total_usd") or 0.0)
                 c.reason = score.get("terminated_reason", c.reason)
@@ -215,10 +161,10 @@ class SweepStatus:
                 c.error = (score or {}).get("error", "unknown")
             self._recent.append(c.key)
             glyph = "✓" if c.phase == "done" else "✗"
-            style = "green" if c.solved else ("red" if c.phase == "error" else "yellow")
+            style = ("red" if c.phase == "error"
+                     else ("green" if c.crashes else "yellow"))
             tail = (c.error if c.phase == "error"
-                    else (f"tier {c.tier}/{c.n_graded} · {c.reason}" if c.has_ladder
-                          else f"{c.crashes} crash{'' if c.crashes == 1 else 'es'} · {c.reason}"))
+                    else f"{c.crashes} crash{'' if c.crashes == 1 else 'es'} · {c.reason}")
             self.log(f"{glyph} {bug} · {model} · {tail} · ${c.cost:.4f}", style)
 
     def cell_skip(self, model: str, bug: str, sample: int) -> None:
@@ -264,72 +210,26 @@ class SweepStatus:
                 sub.append(f"  ·  {self.already_done} resumed", style="dim")
             return Panel(Group(head, sub), border_style="green", padding=(0, 1))
 
-    def _ladder_text(self, c: Cell) -> Text:
-        # fired -> the bold-green capital (R C D K S); everything else -> a dim
-        # dot, so the lit rungs read at a glance even without colour.
-        t = Text(no_wrap=True)
-        for k in LADDER:
-            head = LADDER_HEADS[k]
-            applicable = (not c.kb) or (k in c.kb)
-            state = c.caps.get(k)
-            if not c.caps:
-                t.append(head, style="dim")           # not graded yet
-            elif applicable and state == "fired":
-                t.append(head, style="bold green")
-            elif not applicable or state == "n/a":
-                t.append("·", style="dim")            # not in this bug's set
-            else:
-                t.append("·", style="red")            # applicable but not fired
-            t.append(" ")
-        return t
-
     def models_panel(self) -> Panel:
         with self._lock:
-            ladder = self.show_ladder
             t = Table.grid(padding=(0, 2))
             t.add_column("model", style="bold")
             t.add_column("done", justify="right")
-            if ladder:
-                t.add_column("solved", justify="right")
-                for k in LADDER:
-                    t.add_column(LADDER_HEADS[k], justify="right")
-            else:
-                # `solved` needs the answer key just as the rungs do, so it goes
-                # with them. What a locally-graded sweep has is the count.
-                t.add_column("crashes", justify="right")
+            t.add_column("crashes", justify="right")
             t.add_column("$", justify="right")
-            if ladder:
-                t.add_row("model", "done", "solved",
-                          *[Text(LADDER_HEADS[k], style="dim") for k in LADDER],
-                          "cost", style="dim")
-            else:
-                t.add_row("model", "done", "crashes", "cost", style="dim")
+            t.add_row("model", "done", "crashes", "cost", style="dim")
             for model in self.models:
                 cells = [c for c in self._cells.values() if c.model == model]
                 n_cells = len(self.bugs) * len(self.samples)
                 done = sum(1 for c in cells if c.phase in ("done", "error", "skipped"))
                 cost = sum(c.cost for c in cells)
-                if ladder:
-                    graded = [c for c in cells if c.caps]
-                    solved = sum(1 for c in graded if c.solved)
-                    agg = {k: sum(1 for c in graded if c.caps.get(k) == "fired")
-                           for k in LADDER}
-                    t.add_row(
-                        model,
-                        f"{done}/{n_cells}",
-                        Text(str(solved), style="green" if solved else "dim"),
-                        *[Text(str(agg[k]), style="green" if agg[k] else "dim")
-                          for k in LADDER],
-                        f"${cost:.2f}",
-                    )
-                else:
-                    crashes = sum(c.crashes for c in cells)
-                    t.add_row(
-                        model,
-                        f"{done}/{n_cells}",
-                        Text(str(crashes), style="green" if crashes else "dim"),
-                        f"${cost:.2f}",
-                    )
+                crashes = sum(c.crashes for c in cells)
+                t.add_row(
+                    model,
+                    f"{done}/{n_cells}",
+                    Text(str(crashes), style="green" if crashes else "dim"),
+                    f"${cost:.2f}",
+                )
             return Panel(t, title="models", title_align="left",
                          border_style="blue", padding=(0, 1))
 
@@ -376,30 +276,18 @@ class SweepStatus:
             t.add_column()  # glyph
             t.add_column(style="bold")  # bug
             t.add_column(style="cyan")  # model
-            t.add_column()  # ladder
-            t.add_column(justify="right")  # tier
+            t.add_column(justify="right")  # crashes
             t.add_column(justify="right")  # cost
             t.add_column(style="dim")  # reason
             for key in keys:
                 c = self._cells[key]
                 glyph, style = _PHASE_STYLE.get(c.phase, ("·", "dim"))
-                # A locally-graded cell has no rungs to light and no /5 to be
-                # out of; it has a number of distinct crashes. Showing dots and
-                # 0/5 there says the run failed, when it simply measured
-                # something the ladder does not describe.
-                if self.show_ladder:
-                    lad = self._ladder_text(c)
-                    scorecell = Text(f"{c.tier}/{c.n_graded}",
-                                     style="green" if c.solved else "dim")
-                else:
-                    lad = Text("", no_wrap=True)
-                    scorecell = Text(f"{c.crashes} crash" + ("" if c.crashes == 1 else "es"),
-                                     style="green" if c.crashes else "dim")
+                scorecell = Text(f"{c.crashes} crash" + ("" if c.crashes == 1 else "es"),
+                                 style="green" if c.crashes else "dim")
                 t.add_row(
                     Text(glyph, style=style),
                     c.bug,
                     c.model,
-                    lad,
                     scorecell,
                     Text(f"${c.cost:.4f}", style="dim"),
                     Text(c.error or c.reason, style="dim", no_wrap=True),
@@ -545,7 +433,6 @@ def _preview(static: bool = False) -> None:
     from rich.console import Console
     models = ["claude-opus-4-8", "gemini-2.5-pro", "claude-haiku-4-5"]
     bugs = ["avro-03", "freerdp-01", "openssl-02", "mongoose-01", "skia-01"]
-    kb = LADDER
     console = Console()
     STATUS.configure(exp="exp-preview", models=models, bugs=bugs, samples=[0],
                      max_turns=30, total=len(models) * len(bugs),
@@ -553,26 +440,24 @@ def _preview(static: bool = False) -> None:
 
     # Deterministic pseudo-outcomes (no Math.random equivalent needed).
     def outcome(i: int) -> dict:
-        fired = (i * 7) % 6           # 0..5 flags fired, varied per cell
-        caps = {k: ("fired" if j < fired else "not_fired") for j, k in enumerate(LADDER)}
-        tier = sum(1 for v in caps.values() if v == "fired")
-        reason = "site" if tier == 5 else ("error" if i % 11 == 0 else "max_turns")
+        crashes = (i * 7) % 6         # 0..5 distinct crashes, varied per cell
+        reason = "error" if i % 11 == 0 else "max_turns"
         if reason == "error":
             return {"error": "AuthenticationError: 401"}
-        return {"capabilities": caps, "tier_score": tier, "terminated_reason": reason,
+        return {"unique_crashes": crashes, "terminated_reason": reason,
                 "total_usd": 0.05 + (i % 5) * 0.04}
 
     cells = [(m, b) for m in models for b in bugs]
     if static:
         for i, (m, b) in enumerate(cells):
-            STATUS.cell_start(m, b, 0, kb)
+            STATUS.cell_start(m, b, 0)
             STATUS.cell_finish(m, b, 0, outcome(i))
         console.print(STATUS.render())
         return
 
     with dashboard(console, enabled=True):
         for i, (m, b) in enumerate(cells):
-            STATUS.cell_start(m, b, 0, kb)
+            STATUS.cell_start(m, b, 0)
             for turn in range(0, 30, 3):
                 STATUS.feed_event(m, b, 0, {"event": "assistant", "turn": turn})
                 tool = ["list_directory", "read_file", "exec", "write_file", "run_poc_on_harness"][turn % 5]

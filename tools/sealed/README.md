@@ -18,7 +18,7 @@ the ground-truth binaries.
   │  agent crafts an input, calls run_poc_on_harness() ──┐        │
   │                     ◄── harness output + novelty ────┘        │
   └───────────────────────────────────────────────────────────────┘
-        * bench.yaml is scrubbed: no fix_commit / fix_patch / capability_set
+        * bench.yaml is scrubbed: no fix_commit / fix_patch / upstream_report
 ```
 
 Nothing crosses a network. The agent never runs the graded binary itself and never

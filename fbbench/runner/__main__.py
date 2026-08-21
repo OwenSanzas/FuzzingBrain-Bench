@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 
 from fbbench.env import load_dotenv
-from fbbench.grading.bench_yaml import capability_set, find_bug, read_bench
+from fbbench.grading.bench_yaml import find_bug, read_bench
 from fbbench.images import DEFAULT_IMAGE_PREFIX, challenge_image
 from fbbench.models import CATALOG, PRICES, cost_usd, default_sweep
 from fbbench.paths import REPO
@@ -43,7 +43,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="python -m fbbench.runner",
                                  description="FuzzingBrain Bench episode driver")
     ap.add_argument("--bug", help="challenge alias (e.g. net-snmp-02)")
-    ap.add_argument("--model", default="claude-opus-4-7", help="model id (claude*/gpt*/gemini*)")
+    ap.add_argument("--model", default="claude-opus-4-8", help="model id (claude*/gpt*/gemini*)")
     ap.add_argument("--max-turns", type=int, default=100,
                     help="turn budget per episode (default 100)")
     ap.add_argument("--timeout", type=int, default=1800,
@@ -56,22 +56,13 @@ def main() -> int:
     ap.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                     help="save every graded candidate blob into pocs/{crashed,clean}/ "
                          "(default on; pass --no-preserve-pocs to disable)")
-    ap.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
-                    help="end the episode as soon as the target defect is reproduced "
+    ap.add_argument("--stop-on-crash", action=argparse.BooleanOptionalAction, default=False,
+                    help="end the episode at the first crash "
                          "(default OFF, so the agent keeps hunting for more distinct "
                          "crashes until it stops or --max-turns)")
-    # Context mode. full-scan (blind) is the one active public mode — the bug
-    # description is withheld and the agent finds the crash from the harness +
-    # source alone. diffscan (delta-N) is a reserved extension point, not yet
-    # implemented (see prompts.build_diffscan_message).
-    ap.add_argument("--batch", default=None,
-                    help="uid of the sweep this cell belongs to; the orchestrator "
-                         "registers the sweep's flags under it once")
     ap.add_argument("--seed", type=int, default=None,
                     help="which sample of this (bug, model) cell this run is; recorded "
                          "with the run id so repeats can be told apart")
-    ap.add_argument("--mode", default="full-scan", choices=("full-scan", "diffscan"),
-                    help="agent context mode (default: full-scan / blind)")
     ap.add_argument("--repo-root", default=None,
                     help="benchmark repo root (default: auto-detected)")
     ap.add_argument("--api-key", default=None, help="provider API key (or use the env var)")
@@ -109,14 +100,10 @@ def main() -> int:
     # One id per episode, recorded in score.json so a result can be traced back
     # to the run that produced it. It decides no verdict and reaches nothing
     # outside this process — grading happens in the container, which needs no
-    # identity to run a harness on a file.
-    run_identity = {
-        "uid": uuid.uuid4().hex,
-        "batch": args.batch or "",
-        "model": args.model,
-        "arm": "api",
-        "seed": str(args.seed) if args.seed is not None else "",
-    }
+    # identity to run a harness on a file. The model/arm/seed fields that used
+    # to travel beside it were request headers for a grading service that no
+    # longer exists; score.json already records all three.
+    run_uid = uuid.uuid4().hex
     # Everything (challenge surface, workspace, grading) lives in the
     # image; the host stages nothing. bug_dir="/src" is the in-container view.
     ep_bug_dir = "/src"
@@ -130,35 +117,32 @@ def main() -> int:
         max_turns=args.max_turns,
         time_budget_s=args.timeout,
         episode_log=str(out_dir / "episode.jsonl"),
-        capability_set=capability_set(bug_dir),
         pocs_dir=str(pocs_dir) if pocs_dir else None,
-        stop_on_solve=args.stop_on_solve,
-        mode=args.mode,
+        stop_on_crash=args.stop_on_crash,
     )
 
     score = {
         "bug_id": result.bug_id,
         "model": result.model,
-        # Identity, not score. Which distinct crashes this run
-        # found; the runner deliberately does not, because a runner that knows
-        # can leak it back into the episode. Recording the id lets the report --
-        # which runs afterwards, outside any episode -- correlate them.
-        "run_uid": run_identity["uid"],
-        "batch_uid": run_identity["batch"] or None,
+        # Identity, not score: it names this episode so a result can be traced
+        # back to the run that produced it.
+        "run_uid": run_uid,
         # Every run knob that shaped this episode — surfaced verbatim in the
         # report so a result is fully reproducible from its own score.json.
         "config": {
-            "mode": args.mode,
+            # Blind: the harness and the source at the vulnerable revision, and
+            # nothing else. Recorded so a result carries the conditions it was
+            # produced under.
+            "mode": "full-scan",
             "max_turns": args.max_turns,
             "timeout_s": args.timeout,
-            "stop_on_solve": bool(args.stop_on_solve),
+            "stop_on_crash": bool(args.stop_on_crash),
             "preserve_pocs": bool(args.preserve_pocs),
             # Observed, not assumed: recorded only once something was actually
             # graded. "not-exercised" means the model never submitted a
             # candidate, so nothing graded and there is nothing to claim.
             "grading": result.grading or "not-exercised",
             "image": image,
-            "capability_set": sorted(capability_set(bug_dir) or []),
         },
         # The metric: the number of DISTINCT crashes the agent found (unique
         # crash-type + top-frames signatures).
@@ -171,13 +155,10 @@ def main() -> int:
         "turns_used": result.turns_used,
         "duration_s": result.duration_s,
     }
-    # No `capabilities`, no `tier_score`, no `solved`. Every rung past `crash`
-    # needs an answer key — the PoC, the documented fault, a build at the fix
-    # commit — and none of that ships in a challenge image, so nothing can
-    # compute them. Writing them anyway put five "not_fired" rungs and a false
-    # `solved` into every run: measurements that read as negative results when
-    # nothing had been measured at all. A consumer that finds no `capabilities`
-    # key knows this run has nothing to say about the ladder.
+    # Distinct crashes is the whole score. Deciding whether a crash is THE
+    # defect a challenge was built around needs an answer key — the PoC, the
+    # documented fault, a build at the fix commit — and none of that ships in a
+    # challenge image, so nothing here can claim it.
     if result.error:
         score["error"] = result.error
     cost = {"model": result.model,

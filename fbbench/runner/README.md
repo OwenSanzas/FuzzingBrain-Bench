@@ -35,18 +35,18 @@ python -m fbbench.runner --bug X --model Y --output output/
 Each run produces:
 
 - `episode.jsonl` — turn-by-turn trace (assistant text + tool calls + tool results)
-- `score.json` — final capability bitmap + tier score (0..4)
+- `score.json` — distinct crashes + their signatures, run config, cost
 - `cost.json` — input/output token usage + USD estimate
 
 Every blob the model graded is kept by default, bucketed by whether it
-satisfied `K_b` (pass `--no-preserve-pocs` to drop them):
+crashed the harness (pass `--no-preserve-pocs` to drop them):
 
 ```
 <out-dir>/pocs/
-  ├─ solved/
+  ├─ crashed/
   │   ├─ blob-001-turn03.bin   (the actual input bytes)
-  │   └─ blob-001-turn03.json  (turn, fired flags, k_b, agreed)
-  └─ failed/
+  │   └─ blob-001-turn03.json  (turn, crashed, crash_signature, crash_class)
+  └─ clean/
       ├─ blob-002-turn05.bin
       └─ blob-002-turn05.json
 ```

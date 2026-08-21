@@ -31,9 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp_grade.set_defaults(fn=commands.cmd_grade)
 
     sp_run = sub.add_parser("run", help="run an LLM agent through one or many challenges")
-    sp_run.add_argument("bugs", metavar="bugs",
+    sp_run.add_argument("bugs", metavar="bugs", nargs="+",
                         help="which challenge(s): a single alias (avro-03), a comma "
-                             "list (avro-03,jq-01), or 'all'")
+                             "list (avro-03,jq-01), or 'all'. Whitespace around the "
+                             "commas is fine, quoted or not")
     sp_run.add_argument("--arm", choices=("api", "codex", "claudecode"), default="api",
                         help="which agent backend drives the challenge (default: api). "
                              "'api' = a provider model via its API; 'codex' = OpenAI's "
@@ -71,8 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_run.add_argument("--preserve-pocs", action=argparse.BooleanOptionalAction, default=True,
                         help="save every graded blob into <out>/pocs/{crashed,clean}/ "
                              "(default on; --no-preserve-pocs to disable)")
-    sp_run.add_argument("--stop-on-solve", action=argparse.BooleanOptionalAction, default=False,
-                        help="end at the first target solve (default OFF, so the agent "
+    sp_run.add_argument("--stop-on-crash", action=argparse.BooleanOptionalAction, default=False,
+                        help="end at the first crash (default OFF, so the agent "
                              "keeps hunting for more distinct crashes until it stops "
                              "or --max-turns)")
     dash = sp_run.add_mutually_exclusive_group()

@@ -162,7 +162,7 @@ _LANGUAGE_DISPLAY = {
     "rust": "Rust", "go": "Go", "python": "Python",
 }
 
-# sanitizer token (from grader/expected.yaml class.sanitizer) -> (display name,
+# sanitizer token (from bench.yaml harness.sanitizer) -> (display name,
 # what it reports). The display name + reach are public build facts; they do not
 # name the specific class (e.g. ASan reports many classes, so naming "ASan" does
 # not reveal which one fired).
@@ -194,7 +194,7 @@ SANITIZER_PROFILES = {
 
 # sanitizer token -> the graded build's instrumentation flags. The corpus's
 # graded config is uniform (libFuzzer engine + the sanitizer + -O2 -g), so the
-# flags derive from the token. This is robust for all 68 bugs: per-bug build
+# flags derive from the token. This is robust for all 77 bugs: per-bug build
 # scripts are heterogeneous (build.sh, .py, cmake — some absent), so parsing them
 # is not; the token is always in bench.yaml.
 _SANITIZER_FLAGS = {
@@ -283,8 +283,8 @@ def bug_context(setup_resp: dict) -> str:
 
 
 # setup() fields safe to show in full-scan. Dropped: bug_desc (a synthesized
-# description), capability_set (reveals the fault class), notes. bug_id is kept
-# but is already the neutral <project>-NN alias (see mcp_client.stage_bug_view).
+# description) and notes. bug_id is kept but is already the neutral
+# <project>-NN alias (see mcp_client.stage_bug_view).
 _FULLSCAN_SETUP_KEYS = ("harness",
                         "workspace_path", "source_dir",
                         # public build facts, safe to keep: project name is not a
@@ -580,27 +580,3 @@ def derived_prompts() -> list[Prompt]:
             fills="",
         ),
     ]
-
-
-# ===========================================================================
-# EXTENSION POINT — diff-scan (delta-N) mode.
-#
-# NOT wired into the public runner: the public benchmark is blind only. Left as
-# a deliberate skeleton so a future delta-N arm plugs in with minimal work. A
-# diff-scan episode reuses the blind SYSTEM_PROMPT and swaps ONLY the first user
-# turn: instead of "find any crash cold", it names the file(s) a PR changed (no
-# diff, no line, no fault class) and asks the agent to localize + reproduce.
-#
-# To revive: stage the changed files under src/, wire a runner path that calls
-# build_diffscan_message() for the first turn, and fill in the prompt text below
-# (see git history pre-removal for a worked version).
-# ===========================================================================
-def build_diffscan_message(changed_files: list[str], setup_resp: dict) -> str:
-    """First user turn for a diff-scan (delta-N) episode: a names-only PR hint.
-
-    STUB — the public benchmark runs blind only. Implement when the delta-N arm
-    lands: reuse bug_context(setup_resp) + _fullscan_safe_setup(setup_resp) and
-    add the `changed_files` listing (no diff / line / class).
-    """
-    raise NotImplementedError(
-        "diff-scan (delta-N) mode is not implemented in the public benchmark")
