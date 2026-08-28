@@ -291,6 +291,11 @@ def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
         argv = manifest.render(workspace=str(ws), timeout=str(timeout_s),
                                opening=DEFAULT_OPENING, submit="./submit")
         env = dict(os.environ)
+        # The manifest's own directory goes on PYTHONPATH, so a Python agent can
+        # `python3 -m its_package.run` from the staged workspace without knowing
+        # an absolute path. Harmless to agents that do not import anything.
+        env["PYTHONPATH"] = os.pathsep.join(
+            p for p in (str(manifest.base), env.get("PYTHONPATH", "")) if p)
         if manifest.shell_env:
             env[manifest.shell_env] = str(shell)
         env["SHELL"] = str(shell)
