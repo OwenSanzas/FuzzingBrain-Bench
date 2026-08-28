@@ -76,11 +76,43 @@ class Manifest:
         if "command" not in data:
             raise ValueError(f"{base}: manifest has no `command`")
 
+    @staticmethod
+    def _search_dirs() -> list[Path]:
+        """Where a bare agent name is looked up, most specific first.
+
+        Keeps the bench free of agent code: an agent registers by dropping its
+        manifest (or a symlink to it) into one of these, or by pointing
+        $FBBENCH_AGENTS at the directory it already lives in.
+        """
+        dirs: list[Path] = []
+        for d in os.environ.get("FBBENCH_AGENTS", "").split(os.pathsep):
+            if d.strip():
+                dirs.append(Path(d).expanduser())
+        dirs.append(Path.home() / ".config" / "fbbench" / "agents")
+        dirs.append(Path(__file__).resolve().parents[2] / "agents")
+        return dirs
+
+    @classmethod
+    def resolve(cls, value: str) -> Path:
+        """A path is used as-is; a bare name is found on the search path."""
+        p = Path(value).expanduser()
+        if p.is_file():
+            return p.resolve()
+        if "/" not in value and not value.endswith((".yaml", ".yml", ".json")):
+            for d in cls._search_dirs():
+                for cand in (f"{value}.agent.yaml", f"{value}.agent.yml",
+                             f"{value}.yaml", f"{value}.json", f"{value}/agent.yaml"):
+                    hit = d / cand
+                    if hit.is_file():
+                        return hit.resolve()
+        raise FileNotFoundError(
+            f"no agent manifest for {value!r}. Give a path, or register a name: "
+            "put <name>.agent.yaml in ~/.config/fbbench/agents/ (or a dir named "
+            "by $FBBENCH_AGENTS).")
+
     @classmethod
     def load(cls, path: str | Path) -> "Manifest":
-        p = Path(path).expanduser().resolve()
-        if not p.is_file():
-            raise FileNotFoundError(f"agent manifest not found: {p}")
+        p = cls.resolve(str(path))
         raw = p.read_text()
         try:
             import yaml
