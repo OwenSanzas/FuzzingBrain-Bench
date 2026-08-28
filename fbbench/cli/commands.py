@@ -174,6 +174,8 @@ def cmd_run(args) -> int:
 
     env_combined = {**read_dotenv(), **os.environ}
     arm = getattr(args, "arm", "api")
+    if getattr(args, "agent", None):
+        arm = "external"
     auth = getattr(args, "auth", None)   # None => auto (prefer api, else sub)
     model_map: dict[str, str] | None = None
     api_key = args.api_key
@@ -192,6 +194,13 @@ def cmd_run(args) -> int:
                       if args.model else [claudecode.MODEL_DEFAULT])
         models = [claudecode.model_label(m) for m in raw_models]
         model_map = {claudecode.model_label(m): m for m in raw_models}
+    elif arm == "external":
+        # The label is the agent's model string verbatim; the manifest, not a
+        # per-arm module, is what knows how to drive it.
+        raw_models = ([m.strip() for m in args.model.split(",") if m.strip()]
+                      if args.model else ["default"])
+        models = list(raw_models)
+        model_map = {m: m for m in raw_models}
     else:  # api arm — a provider model driven via its API
         if args.model is None:
             provider, have = detect_provider()
@@ -264,6 +273,7 @@ def cmd_run(args) -> int:
         report_only=getattr(args, "report_only", False),
         runner=[runner_py, "-m", "fbbench.runner"],
         arm=arm, auth=auth, model_map=model_map,
+        agent_manifest=getattr(args, "agent", None),
     )
 
 

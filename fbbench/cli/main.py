@@ -35,10 +35,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="which challenge(s): a single alias (avro-03), a comma "
                              "list (avro-03,jq-01), or 'all'. Whitespace around the "
                              "commas is fine, quoted or not")
-    sp_run.add_argument("--arm", choices=("api", "codex", "claudecode"), default="api",
+    sp_run.add_argument("--arm", choices=("api", "codex", "claudecode", "external"),
+                        default="api",
                         help="which agent backend drives the challenge (default: api). "
                              "'api' = a provider model via its API; 'codex' = OpenAI's "
-                             "codex CLI; 'claudecode' = the Claude Code CLI")
+                             "codex CLI; 'claudecode' = the Claude Code CLI; 'external' = "
+                             "any agent described by --agent <manifest>")
+    sp_run.add_argument("--agent", default=None, metavar="MANIFEST",
+                        help="path to an external agent manifest (YAML/JSON). Implies "
+                             "--arm external; the agent's code lives in its own repo, "
+                             "this file only says how to invoke it")
     sp_run.add_argument("--model", default=None,
                         help="which model(s): one id, a comma list, 'default-lineup' "
                              "(the curated cross-model roster), or 'all'. Default: "

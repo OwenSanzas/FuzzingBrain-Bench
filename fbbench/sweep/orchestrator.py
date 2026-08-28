@@ -226,7 +226,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                api_key: str | None = None, image_prefix: str | None = None,
                  report_only: bool = False, runner: list[str] | None = None,
                arm: str = "api", auth: str = "sub",
-               model_map: dict[str, str] | None = None) -> int:
+               model_map: dict[str, str] | None = None,
+                 agent_manifest: str | None = None) -> int:
     """THE engine: run the (models x bugs x samples) matrix. One code path for
     both a single cell (len 1) and a full sweep (len N) — a single run is just a
     matrix of size one. `fb-bench run` (every arm) calls this.
@@ -315,6 +316,13 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                 return claudecode.run_cell(cell_dir(out, bug, model, sample), bug, raw,
                                            timeout, max_turns, auth=auth, api_key=api_key,
                                            preserve_pocs=preserve_pocs)
+            if arm == "external":
+                from fbbench.sweep.external import Manifest, run_cell as ext_run_cell
+                mani = Manifest.load(agent_manifest)
+                raw = (model_map or {}).get(model, model)
+                return ext_run_cell(cell_dir(out, bug, model, sample), bug, raw,
+                                    timeout, max_turns, manifest=mani,
+                                    api_key=api_key, preserve_pocs=preserve_pocs)
             return run_cell(model, bug, sample, max_turns, out, timeout,
                             preserve_pocs=preserve_pocs, stop_on_crash=stop_on_crash,
                             api_key=api_key, image_prefix=image_prefix, runner=runner,
