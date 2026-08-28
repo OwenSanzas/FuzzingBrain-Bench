@@ -632,22 +632,18 @@ def _persist(cell_dir: Path, *, bug: str, model: str, real: str,
     # cost.json, aligned with the api/codex arms. total_usd is Claude Code's OWN
     # reported cost (total_cost_usd), not derived from our catalog, so it is the
     # authoritative number; the token breakdown comes from its usage events.
+    from fbbench.models import cost_report
     toks = {k: r.get(k, 0) for k in ("input_tokens", "output_tokens",
                                      "cache_read_tokens", "cache_write_tokens")}
-    source = "claude-code"
+    basis = "authoritative"
     if not any(toks.values()):
-        # Killed session: no result event, so fall back to a per-message floor.
+        # Killed session: no result event, so fall back to a per-message floor,
+        # which omits thinking tokens and is therefore a lower bound.
         toks = _usage_floor(r["log_path"])
-        source = "per-message-floor"
-    usd = r["total_usd"]
-    if not usd:
-        from fbbench.models import cost_usd
-        usd = cost_usd(model, toks["input_tokens"], toks["output_tokens"],
-                       toks["cache_read_tokens"],
-                       toks["cache_write_tokens"]).get("total_usd")
-        source += "+catalog"
-    cost = {"model": model_label(model), **toks,
-            "pricing_source": source, "total_usd": usd}
+        basis = "floor"
+    cost = cost_report(model, basis=basis, **toks)
+    cost["model"] = model_label(model)
+    cost["vendor_reported_usd"] = r["total_usd"] or None   # cross-check only
     (cell_dir / "cost.json").write_text(json.dumps(cost, indent=2))
     try:
         _stream_to_transcript(r["log_path"], cell_dir / "transcript.jsonl",
