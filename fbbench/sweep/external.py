@@ -325,7 +325,14 @@ def _agent_usage(ws: Path, log: str, model: str) -> dict:
         inp = max(0, inp - cr)
     out_t = _n("output", "output_tokens")
     cw = _n("cache_write", "cache_write_tokens")
-    rec = cost_usd(raw.get("model") or model, inp, out_t, cr, cw)
+    name = raw.get("model") or model
+    try:
+        rec = cost_usd(name, inp, out_t, cr, cw)
+    except Exception:  # noqa: BLE001
+        # An --agent cell has no routable model label ("default") -- the model is
+        # the agent's business, not the bench's. Unknown price, not an exception.
+        rec = {"total_usd": None, "pricing_known": False,
+               "note": f"no price for {name!r}"}
     if rec.get("total_usd") is None and isinstance(raw.get("cost_usd"), (int, float)):
         # The bench has no price for this model; the agent priced itself. Use its
         # number, labelled as its number.
@@ -398,7 +405,10 @@ def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
                 src = judge.blobs / e["blob"]
                 if src.is_file():
                     shutil.copy(src, sub / e["blob"])
-        usage = _agent_usage(ws, log, model)
+        try:
+            usage = _agent_usage(ws, log, model)
+        except Exception as e:  # noqa: BLE001
+            usage = {"basis": f"cost failed: {type(e).__name__}", "total_usd": None}
         sigs = judge.signatures()
         best = next((judge.blobs / e["blob"] for e in judge.log if e["crashed"]), None)
         if best and best.is_file():
@@ -417,6 +427,8 @@ def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
             "total_usd": usage.get("total_usd"),
             "cost_basis": usage.get("basis"),
         }
+        # The score goes down first: nothing after the agent exits is worth
+        # losing a completed run over.
         (cell_dir / "score.json").write_text(json.dumps(score, indent=2))
         (cell_dir / "cost.json").write_text(json.dumps(
             {**usage, "agent": manifest.name,
