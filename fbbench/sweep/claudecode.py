@@ -293,8 +293,23 @@ def _kill_pg(proc: subprocess.Popen) -> None:
             pass
 
 
-def _run_claude_once(argv: list[str], lf, deadline: float,
-                     env: dict | None = None) -> dict:
+
+def _snapshot_graded(tool_input: dict, work: str, snap_dir: str, n: int) -> None:
+    """Copy a just-submitted candidate out of the workspace before it can be
+    overwritten. Best-effort: a missing file is not worth failing an episode."""
+    p = str(tool_input.get("path") or "")
+    if not p.startswith("/workspace/"):
+        return
+    src = os.path.join(work, p[len("/workspace/"):])
+    try:
+        os.makedirs(snap_dir, exist_ok=True)
+        shutil.copy(src, os.path.join(snap_dir, f"g{n:03d}-{os.path.basename(src)}"))
+    except OSError:
+        pass
+
+
+def _run_claude_once(argv: list[str], lf, deadline: float, work: str = "",
+                     snap_dir: str = "", env: dict | None = None) -> dict:
     """Run ONE `claude -p` process, streaming stream-json lines to `lf` and
     parsing them live. A watchdog hard-kills on the wall-clock backstop.
 
@@ -346,6 +361,14 @@ def _run_claude_once(argv: list[str], lf, deadline: float,
                 if (b.get("type") == "tool_use"
                         and str(b.get("name", "")).endswith("__run_poc_on_harness")):
                     grade_ids.add(b.get("id"))
+                    # Snapshot what was graded, NOW. Only the workspace's final
+                    # contents are scored at the end, so an agent that reuses one
+                    # filename (observed: /workspace/poc.bin graded 8 times in a
+                    # single libpng-01 episode) silently loses every earlier
+                    # version -- including a crashing one. The longer the budget,
+                    # the more often this happens.
+                    _snapshot_graded(b.get("input") or {}, work, snap_dir,
+                                     len(grade_ids))
             st["grade_calls"] = len(grade_ids)
         elif t == "result":
             st["session_id"] = ev.get("session_id") or st["session_id"]
@@ -395,6 +418,7 @@ def run_claude(work: str, mcp_cfg: str, model: str, timeout_s: int,
     env = _clean_env(auth, api_key, home)
 
     log_path = os.path.join(work, "claude.log")
+    snap_dir = os.path.join(os.path.dirname(work), "graded")
     t0 = time.time()
     deadline = t0 + timeout_s
     turns = grade_calls = tokens = 0
@@ -413,7 +437,7 @@ def run_claude(work: str, mcp_cfg: str, model: str, timeout_s: int,
                 terminated = "turn_budget"
                 break
             argv = claude_cmd(prompt, mcp_cfg, model, remaining, resume_session=resume)
-            st = _run_claude_once(argv, lf, deadline, env)
+            st = _run_claude_once(argv, lf, deadline, work, snap_dir, env)
             turns += st["turns"]
             grade_calls += st["grade_calls"]
             tokens += st["tokens"]
@@ -445,7 +469,7 @@ def run_claude(work: str, mcp_cfg: str, model: str, timeout_s: int,
             resume = session_id
 
     return {"terminated": terminated, "duration_s": time.time() - t0,
-            "log_path": log_path, "turns": turns, "grade_calls": grade_calls,
+            "log_path": log_path, "snap_dir": snap_dir, "turns": turns, "grade_calls": grade_calls,
             "tokens": tokens, "input_tokens": in_tok, "output_tokens": out_tok,
             "cache_read_tokens": cr_tok, "cache_write_tokens": cw_tok,
             "total_usd": round(usd, 4)}
@@ -674,7 +698,8 @@ def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
                        auth=auth, api_key=api_key)
         r["max_turns"] = max_turns
         blobs = sorted(set(_candidate_blobs(work)
-                           + _graded_paths(r["log_path"], work)))
+                           + _graded_paths(r["log_path"], work)
+                           + _candidate_blobs(r.get("snap_dir", ""))))
         score = _persist(cell_dir, bug=bug, model=model, real=str(real),
                          r=r, blobs=blobs, alias=alias, preserve_pocs=preserve_pocs)
     finally:
