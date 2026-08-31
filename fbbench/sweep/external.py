@@ -44,6 +44,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import re
 import shutil
 import subprocess
 import tempfile
@@ -51,6 +52,7 @@ import threading
 import time
 from pathlib import Path
 
+from fbbench.models import cost_usd
 from fbbench.grading import find_bug, grade_blob
 from fbbench.images import challenge_image
 from fbbench.runner.mcp_client import _full_scan_alias
@@ -265,6 +267,79 @@ class Judge:
 
 # ---------------------------------------------------------------- the cell
 
+
+def _extract_report(log: str) -> dict | None:
+    """The last JSON object an agent printed, if it carries usage or cost.
+
+    Agents already end a run by printing a summary; FuzzingBrain-Agent prints
+    {stop_reason, steps, cost_usd, cache_hit_rate, usage:{input, output,
+    cache_read, cache_write}}. Reading what an agent already emits beats
+    inventing a file for it to write.
+    """
+    best = None
+    for m in re.finditer(r"\{(?:[^{}]|\{[^{}]*\})*\}", log or ""):
+        try:
+            o = json.loads(m.group(0))
+        except ValueError:
+            continue
+        if isinstance(o, dict) and ("usage" in o or "cost_usd" in o):
+            best = o
+    return best
+
+
+def _agent_usage(ws: Path, log: str, model: str) -> dict:
+    """Cost for one external-agent cell.
+
+    The bench cannot measure a black-box agent, so cost is knowable only if the
+    agent reports it. Two ways, both optional:
+
+      1. the summary JSON it already prints (see _extract_report), or
+      2. `.fbbench/usage.json` in the working directory, same field names.
+
+    Tokens are the record; USD is recomputed here with the bench's price table
+    so every arm prices identically. An agent's own cost_usd is kept beside it
+    as a cross-check, never as the source. An agent that reports nothing is
+    costed as UNKNOWN, not zero -- a missing cost must not read as a free run.
+    """
+    raw = None
+    f = ws / ".fbbench" / "usage.json"
+    if f.is_file():
+        try:
+            raw = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            return {"basis": f"unreadable: {e}", "total_usd": None}
+    if raw is None:
+        raw = _extract_report(log)
+    if not raw:
+        return {"basis": "unreported", "total_usd": None}
+
+    u = raw.get("usage") if isinstance(raw.get("usage"), dict) else raw
+    def _n(*names):
+        for n in names:
+            if u.get(n) is not None:
+                return int(u[n] or 0)
+        return 0
+    cr = _n("cache_read", "cache_read_tokens")
+    inp = _n("input", "input_tokens")
+    if raw.get("input_is_total") or u.get("input_is_total"):
+        inp = max(0, inp - cr)
+    out_t = _n("output", "output_tokens")
+    cw = _n("cache_write", "cache_write_tokens")
+    rec = cost_usd(raw.get("model") or model, inp, out_t, cr, cw)
+    if rec.get("total_usd") is None and isinstance(raw.get("cost_usd"), (int, float)):
+        # The bench has no price for this model; the agent priced itself. Use its
+        # number, labelled as its number.
+        rec["total_usd"] = float(raw["cost_usd"])
+        rec["basis"] = "agent-priced"
+    rec.update({"basis": rec.get("basis", "agent-reported"),
+                "model": raw.get("model") or model,
+                "input_tokens": inp, "output_tokens": out_t,
+                "cache_read_tokens": cr, "cache_write_tokens": cw,
+                "agent_reported_usd": raw.get("cost_usd"),
+                "cache_hit_rate": raw.get("cache_hit_rate")})
+    return rec
+
+
 def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
              max_turns: int = 100, *, manifest: Manifest, api_key: str | None = None,
              preserve_pocs: bool = True) -> dict | None:
@@ -323,6 +398,7 @@ def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
                 src = judge.blobs / e["blob"]
                 if src.is_file():
                     shutil.copy(src, sub / e["blob"])
+        usage = _agent_usage(ws, log, model)
         sigs = judge.signatures()
         best = next((judge.blobs / e["blob"] for e in judge.log if e["crashed"]), None)
         if best and best.is_file():
@@ -336,12 +412,15 @@ def run_cell(cell_dir: Path, bug: str, model: str, timeout_s: int,
             "blobs_written": len(judge.log), "max_turns": max_turns,
             "agent": manifest.name,
             "network": "allowed" if manifest.allow_network else "blocked",
-            "tokens_used": None, "total_usd": None,
+            "tokens_used": (usage.get("input_tokens", 0)
+                            + usage.get("output_tokens", 0)) or None,
+            "total_usd": usage.get("total_usd"),
+            "cost_basis": usage.get("basis"),
         }
         (cell_dir / "score.json").write_text(json.dumps(score, indent=2))
         (cell_dir / "cost.json").write_text(json.dumps(
-            {"model": model, "agent": manifest.name, "pricing_source": "external",
-             "total_usd": None}, indent=2))
+            {**usage, "agent": manifest.name,
+             "pricing_source": f"external:{usage.get('basis')}"}, indent=2))
         return score
     finally:
         shutil.rmtree(root, ignore_errors=True)

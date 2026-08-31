@@ -85,3 +85,29 @@ output/<run>/<bug>/<model>/seed-0/
 
 `score.json` records `agent` and `grading: in-image` — who ran (an external
 agent) and who judged (the bench), kept apart so the number can be trusted.
+
+## Reporting cost (optional)
+
+The bench cannot see inside an external agent, so a run's cost is only knowable
+if the agent reports it. Write `.fbbench/usage.json` in the working directory
+before exiting:
+
+```json
+{
+  "model": "claude-opus-5",
+  "input_tokens": 35217,
+  "output_tokens": 6376,
+  "cache_read_tokens": 537296,
+  "cache_write_tokens": 29186,
+  "input_is_total": false
+}
+```
+
+Set `input_is_total: true` if `input_tokens` includes the cached prefix (what
+OpenAI-style clients report); the bench de-totals it so every arm prices the
+same way. The cost is then computed with the bench's own price table and
+recorded with `cost_basis: agent-reported`.
+
+An agent that reports nothing is costed as **unknown**, not as zero — `total_usd`
+stays null and the leaderboard prints `$ —`. A missing cost must never look like
+a free run.

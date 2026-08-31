@@ -98,6 +98,14 @@ def _cell_failure(cd: Path) -> dict:
     return {"error": lines[-1][:300], "error_log": str(log)}
 
 
+
+def _usd(r: dict | None) -> str:
+    """Render a cell's cost. An unknown cost is NOT zero: an external agent that
+    reports no usage must not be indistinguishable from a run that was free."""
+    v = (r or {}).get("total_usd")
+    return f"${v:.4f}" if isinstance(v, (int, float)) else "$ —"
+
+
 def _failed_line(r: dict | None) -> str:
     """The one-line reason a cell failed, plus where to read the whole thing."""
     msg = (r or {}).get("error") or "unknown"
@@ -357,8 +365,7 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
             r = _cell(model, bug, sample)
             if r and "error" not in r:
                 print(f"      -> [{bug}] {r.get('unique_crashes','?')} crashes  "
-                      f"{r.get('terminated_reason','')}  ${r.get('total_usd') or 0.0:.4f}",
-                      flush=True)
+                      f"{r.get('terminated_reason','')}  {_usd(r)}", flush=True)
             else:
                 print(f"      -> [{bug}] {_failed_line(r)}", flush=True)
                 failures.append((model, bug, sample, r))
@@ -390,8 +397,8 @@ def run_matrix(models: list[str], bugs: list[str], *, samples: int = 1,
                     print(f"  {tag} ...", flush=True)
                     r = _cell(model, bug, sample)
                     if r and "error" not in r:
-                        print(f"      -> {r.get('unique_crashes','?')} crashes  {r.get('terminated_reason','')}  "
-                              f"${r.get('total_usd') or 0.0:.4f}", flush=True)
+                        print(f"      -> {r.get('unique_crashes','?')} crashes  "
+                              f"{r.get('terminated_reason','')}  {_usd(r)}", flush=True)
                     else:
                         print(f"      -> {_failed_line(r)}", flush=True)
                         failures.append((model, bug, sample, r))
