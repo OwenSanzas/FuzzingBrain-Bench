@@ -122,3 +122,30 @@ def cost_usd(model: str, input_tokens: int, output_tokens: int,
         "output_usd": round(out_usd, 6),
         "total_usd": round(total, 6),
     }
+
+def cost_report(model: str, *, input_tokens: int, output_tokens: int,
+                cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+                input_is_total: bool = False, basis: str = "authoritative") -> dict:
+    """The one cost record every arm writes. Same fields, same arithmetic.
+
+    Arms disagreed on cost because each did its own accounting:
+      * the CRS client reports input_tokens as the WHOLE prompt (cached
+        included) -- billing that as fresh input on top of the cache-read rate
+        overstated an episode ~4x. Pass input_is_total=True for such a backend.
+      * Claude Code reports authoritative usage only in its `result` event; a
+        session killed by the wall clock emits none, and the cell recorded
+        $0.00. Pass what you have with basis="floor" so a lower bound is
+        visible as a lower bound.
+
+    `basis` travels with the number: "authoritative" | "floor" | "estimate".
+    """
+    fresh = input_tokens - cache_read_tokens if input_is_total else input_tokens
+    fresh = max(0, fresh)
+    out = cost_usd(model, fresh, output_tokens, cache_read_tokens, cache_write_tokens)
+    out.update({"model": model, "basis": basis,
+                "input_tokens": fresh, "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens})
+    if input_is_total:
+        out["input_tokens_total_reported"] = input_tokens
+    return out
